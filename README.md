@@ -9,6 +9,8 @@
 
 TIbrowser 使用 **Electron（内嵌 Chromium 内核）+ React + TypeScript** 构建。它不依赖任何 Google 账号/同步服务，AI 能力完全由用户自备的 **OpenAI 兼容 API**（DeepSeek / OpenAI / 通义千问 / Moonshot / 智谱 …）驱动。
 
+> 软件局限性与安全局限性：本软件仅供日常使用，不能用于重要场合；本软件由Deepseek V4-Pro生成，可能出现错误。
+
 ## ✨ 功能特性
 
 ### 浏览器核心（Chrome 大部分功能）
