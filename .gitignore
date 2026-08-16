@@ -4,7 +4,10 @@ node_modules/
 # 构建产物
 out/
 dist/
-release/
+# release 目录默认忽略，但保留安装包供用户直接下载
+release/*
+!release/*.exe
+!release/README.md
 
 # 日志
 *.log
