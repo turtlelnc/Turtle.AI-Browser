@@ -1,6 +1,6 @@
 # TIbrowser - 中文版
 
-> 基于 Chromium 内核的 AI 安全浏览器 —— 拥有 Chrome 的大部分功能，内置 AI 助手与本地安全服务。
+> 基于 Chromium 内核的 AI 安全浏览器 —— 拥有 Chrome 的大部分功能，内置 AI 助手与本地安全服务。  
 > 我们的官网 turtleweb.cc.cd ——— 基于 [README.md](https://github.com/turtlelnc/Turtle.AI-Browser/blob/main/README.md) 的内容进行 **生动立体** 的解释  
 > [🔗点击前往官网](https://turtleweb.cc.cd)
 
