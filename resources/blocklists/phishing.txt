@@ -1,0 +1,3 @@
+# 钓鱼网站域名（每行一个，可追加）
+# 示例：
+# 0.0.0.0 example-phishing-page.com

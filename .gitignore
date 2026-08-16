@@ -1,0 +1,20 @@
+# 依赖
+node_modules/
+
+# 构建产物
+out/
+dist/
+release/
+
+# 日志
+*.log
+npm-debug.log*
+
+# 编辑器
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+
+# 本地敏感数据（API key 加密存储，勿提交）
+*.local.json

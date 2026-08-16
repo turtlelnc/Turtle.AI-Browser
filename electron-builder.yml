@@ -1,0 +1,45 @@
+# TIbrowser 打包配置 —— 最终用户使用的产物输出到 release/
+appId: com.tibrowser.app
+productName: TIbrowser
+copyright: Copyright © 2026 TIbrowser
+
+directories:
+  output: release          # 最终用户使用的部分
+  buildResources: build
+
+# 只打包编译后的代码与运行时资源
+files:
+  - out/**/*
+  - resources/**/*
+  - package.json
+  - "!src/**/*"
+
+# 排除依赖中不必要的部分，减小体积
+asarUnpack:
+  - resources/**
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # 自定义应用图标（electron-builder 会自动将 PNG 转换为 .ico）
+  icon: build/icon.png
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: TIbrowser
+
+mac:
+  target:
+    - dmg
+  category: public.app-category.productivity
+
+linux:
+  target:
+    - AppImage
+  category: Network

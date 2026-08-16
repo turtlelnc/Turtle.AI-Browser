@@ -1,0 +1,35 @@
+{
+  "note": "内置示例黑名单。可把真实威胁情报（URLhaus / PhishTank / EasyList）转换为 hosts 文件放入 resources/blocklists/ 目录，运行时自动合并。",
+  "malware": [
+    "example-malware-host.com",
+    "malware-c2-demo.net"
+  ],
+  "phishing": [
+    "example-phishing-page.com",
+    "fake-bank-verify-demo.org"
+  ],
+  "ads": [
+    "doubleclick.net",
+    "googleadservices.com",
+    "googlesyndication.com",
+    "adservice.google.com",
+    "adnxs.com",
+    "adsrvr.org",
+    "taboola.com",
+    "outbrain.com",
+    "criteo.com",
+    "adroll.com"
+  ],
+  "tracking": [
+    "google-analytics.com",
+    "googletagmanager.com",
+    "scorecardresearch.com",
+    "hotjar.com",
+    "mixpanel.com",
+    "segment.io",
+    "facebook.net",
+    "clarity.ms",
+    "newrelic.com",
+    "amplitude.com"
+  ]
+}
