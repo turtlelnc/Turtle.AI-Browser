@@ -1,6 +1,6 @@
-# TIbrowser
+# TIbrowser - 中文版
 
-> 基于 Chromium 内核的 AI 安全浏览器 —— 拥有 Chrome 的大部分功能，内置 AI 助手与本地安全服务。
+> 基于 Chromium 内核的 伪AI 安全浏览器 —— 拥有 Chrome 的大部分功能，内置 AI 助手与本地安全服务。
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-33-47848F.svg)](https://www.electronjs.org/)
