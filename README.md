@@ -1,6 +1,8 @@
-# TIbrowser
+# TIbrowser - 中文版
 
-> 基于 Chromium 内核的 AI 安全浏览器 —— 拥有 Chrome 的大部分功能，内置 AI 助手与本地安全服务。
+> 基于 Chromium 内核的 AI 安全浏览器 —— 拥有 Chrome 的大部分功能，内置 AI 助手与本地安全服务。  
+> 我们的官网 turtleweb.cc.cd ——— 基于 [README.md](https://github.com/turtlelnc/Turtle.AI-Browser/blob/main/README.md) 的内容进行 **生动立体** 的解释  
+> [🔗点击前往官网](https://turtleweb.cc.cd)
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Electron](https://img.shields.io/badge/Electron-33-47848F.svg)](https://www.electronjs.org/)
@@ -8,6 +10,8 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6.svg)](https://www.typescriptlang.org/)
 
 TIbrowser 使用 **Electron（内嵌 Chromium 内核）+ React + TypeScript** 构建。它不依赖任何 Google 账号/同步服务，AI 能力完全由用户自备的 **OpenAI 兼容 API**（DeepSeek / OpenAI / 通义千问 / Moonshot / 智谱 …）驱动。
+
+> 软件局限性与安全局限性：本软件仅供日常使用，不能用于重要场合；本软件由Deepseek V4-Pro生成，可能出现错误。
 
 ## ✨ 功能特性
 
