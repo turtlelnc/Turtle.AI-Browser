@@ -18,11 +18,15 @@ files:
 asarUnpack:
   - resources/**
 
+# ---------- Windows ----------
 win:
   target:
     - target: nsis
-      arch:
-        - x64
+      arch: [x64]
+    - target: nsis
+      arch: [ia32]
+    - target: nsis
+      arch: [arm64]
   # 自定义应用图标（electron-builder 会自动将 PNG 转换为 .ico）
   icon: build/icon.png
 
@@ -33,13 +37,24 @@ nsis:
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: TIbrowser
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
 
+# ---------- macOS（需在 macOS 上构建） ----------
 mac:
   target:
-    - dmg
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
   category: public.app-category.productivity
+  icon: build/icon.png
+  artifactName: ${productName}-${version}-${arch}.${ext}
 
+# ---------- Linux ----------
 linux:
   target:
-    - AppImage
+    - target: AppImage
+      arch: [x64, arm64]
   category: Network
+  icon: build/icon.png
+  artifactName: ${productName}-${version}-${arch}.${ext}

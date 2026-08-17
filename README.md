@@ -37,20 +37,27 @@ TIbrowser 使用 **Electron（内嵌 Chromium 内核）+ React + TypeScript** �
 
 ## 📥 下载与安装
 
-### 方式一：下载安装包（Windows）
+### Windows 10/11
 
-到本仓库 [release](release/) 目录下载安装包，或直接点击：
+| 架构 | 安装包 | 适用 |
+|---|---|---|
+| **x64**（64 位） | [⬇️ 下载](release/TIbrowser-1.0.0-beta-x64-setup.exe) | 绝大多数电脑（推荐） |
+| **x86**（32 位） | [⬇️ 下载](release/TIbrowser-1.0.0-beta-ia32-setup.exe) | 老旧 32 位电脑 |
+| **ARM64** | [⬇️ 下载](release/TIbrowser-1.0.0-beta-arm64-setup.exe) | 骁龙等 ARM 笔记本 |
 
-[⬇️ 下载 TIbrowser Setup 0.1.0.exe](release/TIbrowser%20Setup%200.1.0.exe)（约 79 MB）
-
-1. 双击运行安装包，按向导完成安装
+1. 下载对应架构的安装包，双击运行，按向导完成安装
 2. 从桌面或开始菜单启动 **TIbrowser**
 
 > 首次运行 Windows SmartScreen 可能提示「未知发布者」，点击「更多信息 → 仍要运行」即可（本安装包未做代码签名）。
 
-### 方式二：从源码构建
+### Linux / macOS
 
-见下方 [本地开发](#-本地开发)。
+Linux（AppImage）与 macOS（dmg）版本**需在对应系统上构建**——Windows 上交叉打包 AppImage 受符号链接权限限制、macOS 无法交叉打包。打包配置已就绪，在 Linux / macOS 机器或 CI 上执行：
+
+```bash
+npx electron-builder --linux   # Linux AppImage（x64 / arm64）
+npx electron-builder --mac     # macOS dmg / zip（x64 / arm64）
+```
 
 ## 🚀 使用指南
 
@@ -92,7 +99,7 @@ npm run dev          # 开发模式（热更新）
 ```bash
 npm run typecheck    # 类型检查
 npm run build        # 编译
-npm run build:win    # 打包 → release/TIbrowser Setup 0.1.0.exe
+npm run build:win    # 打包 Windows x64/x86/ARM64 → release/*.exe
 npm run build:dir    # 免安装目录 → release/win-unpacked/
 ```
 

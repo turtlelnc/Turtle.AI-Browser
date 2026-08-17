@@ -4,14 +4,19 @@
 
 ## 目录内容
 
-- `TIbrowser Setup 0.1.0.exe` — NSIS 安装包（**已纳入版本管理**，用户可直接从 GitHub 下载）
-- `win-unpacked/` — 免安装的解包版（体积大，不提交到 git）
+| 文件 | 说明 |
+|---|---|
+| `TIbrowser-1.0.0-beta-x64-setup.exe` | Windows 64 位安装包（推荐） |
+| `TIbrowser-1.0.0-beta-ia32-setup.exe` | Windows 32 位安装包 |
+| `TIbrowser-1.0.0-beta-arm64-setup.exe` | Windows ARM64 安装包 |
+
+> Linux（AppImage）与 macOS（dmg）版本需在对应系统上构建（`npx electron-builder --linux` / `--mac`），配置见 `electron-builder.yml`。
 
 ## 说明
 
-- 安装包 `TIbrowser Setup 0.1.0.exe`（约 79 MB）已提交到仓库，见 [主 README](../README.md) 的「下载与安装」。
-- `win-unpacked/` 因包含超过 GitHub 单文件上限（100MB）的 `TIbrowser.exe`（约 181MB），不随仓库提交；需要时运行 `npm run build:dir` 本地生成。
-- 应用图标来自 `build/icon.png`（`electron-builder.yml` 的 `win.icon` 引用），换图标只需替换该文件后重新打包。
+- 安装包已纳入版本管理，用户可直接从 GitHub 下载，见 [主 README](../README.md)。
+- `.blockmap` / `latest.yml` 为自动更新元数据（未启用自动更新），随构建生成、未提交到 git。
+- 应用图标来自 `build/icon.png`，换图标只需替换该文件后重新打包。
 
 ## 源码与产物分离
 

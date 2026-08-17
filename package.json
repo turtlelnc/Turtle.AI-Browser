@@ -1,6 +1,6 @@
 {
   "name": "tibrowser",
-  "version": "0.1.0",
+  "version": "1.0.0-beta",
   "description": "TIbrowser —— 基于 Chromium 内核的 AI 安全浏览器",
   "main": "out/main/index.js",
   "author": "TIbrowser",

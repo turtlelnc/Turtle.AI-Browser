@@ -104,7 +104,8 @@ function unpackCrx(crxPath: string, outDir: string): void {
     const sigLen = buf.readUInt32LE(12)
     zipOffset = 16 + pubKeyLen + sigLen
   } else if (version === 3) {
-    zipOffset = buf.readUInt32LE(8)
+    // CRX3 的 headerSize 只指 protobuf 部分，ZIP 从 12 字节固定头之后开始
+    zipOffset = 12 + buf.readUInt32LE(8)
   } else {
     throw new Error(`不支持的 .crx 版本：${version}`)
   }

@@ -2,7 +2,7 @@ import type { CliPermissionLevel, Settings, SearchEngineId } from './types'
 
 /** 产品信息 */
 export const APP_NAME = 'TIbrowser'
-export const APP_VERSION = '0.1.0'
+export const APP_VERSION = '1.0.0-beta'
 
 /** 内部伪协议 / 页面标识 */
 export const NEW_TAB_URL = 'tibrowser://newtab'
