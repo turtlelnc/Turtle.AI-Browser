@@ -37,3 +37,7 @@ npm-debug.log*
 # 临时验证产物
 .tmp-*
 
+
+# 发行目录（体积大，由 npm run dist 生成，不随源码入库）
+release/dist/
+
