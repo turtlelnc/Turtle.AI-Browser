@@ -26,6 +26,9 @@ ScanResult ScanUrlForProtection(const std::string& url);
 /** 下载安全判定：不安全安装包给出 warn（可保留），turtlelnc 发布物直接放行 */
 ScanResult CheckDownload(const std::string& url, const std::string& filename);
 
+/** 本地黑名单条目总数（供安全报告展示） */
+size_t BlocklistSize();
+
 /** 初始化黑名单（读取 resources/blocklists/*.txt），幂等 */
 void InitSecurity();
 

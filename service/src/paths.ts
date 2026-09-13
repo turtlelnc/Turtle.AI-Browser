@@ -1,12 +1,15 @@
 /**
  * 用户数据目录解析。
  *
- * 对齐 Electron 的 `app.getPath('userData')`：
- * Windows = `%APPDATA%/TiBrowser`，macOS = `~/Library/Application Support/TiBrowser`，
- * Linux = `$XDG_CONFIG_HOME/TiBrowser`（回退 `~/.config/TiBrowser`）。
+ * Windows 上使用 `%LOCALAPPDATA%/TiBrowser`，**不是** `%APPDATA%`。
+ * 原因：本机 `%APPDATA%` 被 OneDrive 同步，Chromium 的 profile 与缓存目录放在同步盘上
+ * 会出现文件占用冲突（实测 cef.log 反复刷 "Failed to open persistent cache files ...
+ * 另一个程序正在使用此文件"），并伴随网络服务子进程崩溃。
+ * 原生外壳因此改用 `%LOCALAPPDATA%`，边车必须与之一致，否则握手文件互相看不见
+ * （表现为"边车已启动"但"握手超时，AI 能力不可用"）。
  *
- * 边车**不依赖 Electron**，因此这里自行推导，并允许通过参数或环境变量覆盖
- * （原生宿主可把用户数据目录通过 `--user-data` / `TIB_USER_DATA` 传给边车）。
+ * 可通过 `--user-data` 参数或环境变量 `TIB_USER_DATA` 覆盖。
+ * macOS = `~/Library/Application Support/TiBrowser`，Linux = `$XDG_CONFIG_HOME/TiBrowser`。
  */
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -25,9 +28,12 @@ function defaultUserDataDir(): string {
   if (env) return env
 
   if (process.platform === 'win32') {
+    // 与 native/src/main.cpp 的 ResolveUserDataDir() 保持一致：LOCALAPPDATA 优先
+    const localAppData = process.env['LOCALAPPDATA']?.trim()
+    if (localAppData) return join(localAppData, USER_DATA_DIR_NAME)
     const appData = process.env['APPDATA']?.trim()
     if (appData) return join(appData, USER_DATA_DIR_NAME)
-    return join(homedir(), 'AppData', 'Roaming', USER_DATA_DIR_NAME)
+    return join(homedir(), 'AppData', 'Local', USER_DATA_DIR_NAME)
   }
   if (process.platform === 'darwin') {
     return join(homedir(), 'Library', 'Application Support', USER_DATA_DIR_NAME)

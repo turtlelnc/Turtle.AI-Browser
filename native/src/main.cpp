@@ -16,6 +16,8 @@
 
 namespace {
 
+}  // namespace
+
 /**
  * 当前进程模型（写进日志，不假装是正常隔离模式）。
  *
@@ -33,6 +35,8 @@ std::string DetectProcessModel() {
   if (cl->HasSwitch("no-sandbox")) return "多进程 + 已关闭沙箱（--no-sandbox）";
   return "标准（多进程 + 沙箱）";
 }
+
+namespace {
 
 /**
  * 取用户数据目录。

@@ -7,6 +7,8 @@
 #include "include/cef_client.h"
 #include "include/cef_command_line.h"
 #include "include/cef_parser.h"
+#include "include/cef_request.h"
+#include "include/cef_urlrequest.h"
 #include "include/cef_resource_handler.h"
 #include "include/cef_scheme.h"
 #include "include/cef_values.h"
@@ -133,5 +135,11 @@ std::string ExecutableDir();
 
 /** 简易日志：写入 stderr，同时追加到用户数据目录下的 tibrowser.log */
 void Log(const std::string& message);
+
+/**
+ * 当前进程模型的可读描述（写进启动日志与"关于"页）。
+ * 本机网络服务子进程不可用，需要用单进程兼容模式规避；这里如实反映，不假装是标准隔离。
+ */
+std::string DetectProcessModel();
 
 }  // namespace tib

@@ -221,6 +221,15 @@ class TibWindow : public CefWindowDelegate, public CefBrowserViewDelegate {
   CefRefPtr<CefBrowser> chrome_browser() const;
   bool incognito() const { return incognito_; }
 
+  /** 当前活动标签页的 URL / 标题（供书签、网页应用等使用） */
+  std::string GetActiveUrl() const;
+  std::string GetActiveTitle() const;
+
+  /** 向 UI 推送集合类变更事件 */
+  void SendAppsChanged(const std::string& apps_json);
+  void SendExtensionsChanged(const std::string& extensions_json);
+  void SendAccountsChanged(const std::string& accounts_json, const std::string& sync_json);
+
   /** 向 UI 推送事件（state / findResult / ...） */
   void SendEvent(const std::string& name, CefRefPtr<CefValue> payload);
   /** 推送完整标签状态 */

@@ -160,6 +160,11 @@ const char* kPhishKeywords[] = {"login-verify", "account-verify", "bank-verify",
 
 }  // namespace
 
+size_t BlocklistSize() {
+  InitSecurity();
+  return g_malware.size() + g_phishing.size() + g_ads.size() + g_tracking.size();
+}
+
 void InitSecurity() {
   std::call_once(g_init_once, [] {
     const std::string dir = AppContext::Get().app_dir() + "\\resources\\blocklists\\";

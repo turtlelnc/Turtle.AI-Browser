@@ -2,6 +2,7 @@
 #include "app.h"
 
 #include "scheme.h"
+#include "store.h"
 #include <cstdio>
 
 #include "window.h"
@@ -52,9 +53,10 @@ void TibApp::OnBeforeCommandLineProcessing(const CefString& process_type,
 
 void TibApp::OnContextInitialized() {
   CEF_REQUIRE_UI_THREAD();
-  Log("OnContextInitialized: 开始注册 tib:// 协议");
+  // 原生存储在开窗之前初始化：窗口创建时就要用到皮肤等设置
+  NativeStore::Get().Init();
+  AppContext::Get().set_skin(NativeStore::Get().settings.skin);
   RegisterTibSchemeHandlers();
-  Log("OnContextInitialized: 协议注册完成，创建主窗口");
   CreateMainWindow(false);
   Log(std::string("CEF 上下文初始化完成，内核版本 ") + CEF_VERSION);
 }

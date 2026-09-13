@@ -31,4 +31,24 @@ std::string ServiceStatusJson();
 /** 供路由使用：automation.info 的 JSON 响应体（本地控制接口信息） */
 std::string AutomationInfoJson();
 
+/** 边车 RPC 调用完成后的回调：ok=false 时 error 是中文原因 */
+using SidecarCallback = std::function<void(bool ok, const std::string& body_or_error)>;
+
+/**
+ * 异步调用边车的 RPC 方法。
+ *
+ * 为什么是异步：CEF 的网络请求本身是异步的（CefURLRequest），而 UI 的桥接契约是 Promise，
+ * 所以「原生 → 边车」这一段天然异步；原生侧收到结果后再回执给渲染进程。
+ * 同步等待会造成 UI 卡死与线程死锁，因此这里坚持异步。
+ *
+ * @param method  边车方法名（如 ai.mode.get）
+ * @param params  参数 JSON（对象字面量，可为空字符串表示 {}）
+ * @param callback 完成回调（在 CEF UI 线程调用）
+ */
+void CallSidecarAsync(const std::string& method, const std::string& params,
+                      SidecarCallback callback);
+
+/** 边车是否就绪（读取握手文件） */
+bool SidecarReady();
+
 }  // namespace tib

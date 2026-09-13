@@ -584,6 +584,39 @@ void TibWindow::EnsureVisibleOnScreen() {
 
 }
 
+std::string TibWindow::GetActiveUrl() const {
+  for (const auto& tab : tabs_) {
+    if (tab->id == active_id_) return tab->info.url;
+  }
+  return "";
+}
+
+std::string TibWindow::GetActiveTitle() const {
+  for (const auto& tab : tabs_) {
+    if (tab->id == active_id_) return tab->info.title;
+  }
+  return "";
+}
+
+void TibWindow::SendAppsChanged(const std::string& apps_json) {
+  RunInChrome("window.__tibDeliverEvent && window.__tibDeliverEvent('appsChanged', JSON.stringify(" +
+              apps_json + "))");
+}
+
+void TibWindow::SendExtensionsChanged(const std::string& extensions_json) {
+  RunInChrome(
+      "window.__tibDeliverEvent && window.__tibDeliverEvent('extensionsChanged', JSON.stringify(" +
+      extensions_json + "))");
+}
+
+void TibWindow::SendAccountsChanged(const std::string& accounts_json,
+                                    const std::string& sync_json) {
+  RunInChrome(
+      "window.__tibDeliverEvent && window.__tibDeliverEvent('accountsChanged', JSON.stringify({"
+      "accounts:" +
+      accounts_json + ",syncState:" + sync_json + "}))");
+}
+
 void TibWindow::OnTabTitle(const std::string& tab_id, const std::string& title) {
   const auto it = std::find_if(tabs_.begin(), tabs_.end(),
                                [&](const std::shared_ptr<Tab>& t) { return t->id == tab_id; });
@@ -824,6 +857,7 @@ void TibWindow::LoadChromeUi() {
 
 /**
  * 外壳 UI 自检：在渲染进程里检查桥、React 挂载与关键样式，把结论回流到原生日志。
+ *
  * 为什么不用 CDP：本机实测 CEF 的调试 WebSocket 会挂起，而这条链路走的是
  * 我们自己的 console 上行通道，既验证了桥本身，又不依赖外部工具。
  */
@@ -833,36 +867,52 @@ void TibWindow::RunUiSelfTest() {
   function report(msg) {
     try { console.log('__TIB_CALL__' + JSON.stringify({ id: 0, method: 'diagnostics.log', params: { message: msg } })); } catch (e) {}
   }
-  try {
-    var root = document.documentElement;
-    var rootEl = document.getElementById('root');
-    var appEl = document.querySelector('.app') || rootEl;
-    var box = appEl && appEl.getBoundingClientRect ? appEl.getBoundingClientRect() : { width: 0, height: 0 };
-    var cs = appEl ? getComputedStyle(appEl) : null;
-    var text = (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 120);
-    report('href=' + location.href
-      + ' | tib=' + (typeof window.tib)
-      + ' | host=' + (typeof (window.__tibHost && window.__tibHost.call))
-      + ' | dispatch=' + (typeof window.__tibDeliverReply)
-      + ' | rootKids=' + (rootEl ? rootEl.childElementCount : -1)
-      + ' | appBox=' + Math.round(box.width) + 'x' + Math.round(box.height)
-      + ' | bodyBg=' + getComputedStyle(document.body).backgroundColor
-      + ' | appBg=' + (cs ? cs.backgroundColor : 'n/a')
-      + ' | skin=' + (root.dataset.skin || 'n/a')
-      + ' | theme=' + (root.dataset.theme || 'n/a')
-      + ' | title=' + document.title
-      + ' | text=' + text);
-    // 顺带验证一次真实往返（异步，结果单独回流）
-    if (window.tib && window.tib.getState) {
-      window.tib.getState().then(function (s) {
-        report('getState 往返成功：标签数=' + ((s && s.tabs) ? s.tabs.length : 'n/a')
-          + ' 皮肤=' + (s && s.settings ? s.settings.skin : 'n/a'));
-      }, function (e) {
-        report('getState 往返失败：' + (e && e.message ? e.message : String(e)));
-      });
-    }
-  } catch (e) {
-    report('自检脚本异常：' + (e && e.message ? e.message : String(e)));
+  if (!window.tib || !window.tib.getState) { report('自检无法进行：window.tib 不存在'); return; }
+  window.tib.getState().then(function (s) {
+    report('getState 往返成功：标签数=' + ((s && s.tabs) ? s.tabs.length : 'n/a')
+      + ' 皮肤=' + (s && s.settings ? s.settings.skin : 'n/a'));
+  }, function (e) {
+    report('getState 往返失败：' + (e && e.message ? e.message : String(e)));
+  });
+  // 逐项调用设置面板各分区用到的接口，把每个方法是否可用一次性打出来。
+  // 期望：可用的回 "ok"，尚未实现的回明确中文原因（不能是静默挂起）。
+  var probes = [
+    ['getSecurityReport', []],
+    ['getProtectionLevel', []],
+    ['getFingerprintProfile', []],
+    ['getEnergyMode', []],
+    ['getSkin', []],
+    ['getSettings', []],
+    ['getBookmarks', []],
+    ['getHistory', []],
+    ['getDownloads', []],
+    ['getInstalledApps', []],
+    ['getExtensions', []],
+    ['getAccounts', []],
+    ['getSyncState', []],
+    ['getAiConnection', []],
+    ['getAiMode', []],
+    ['serviceStatus', []],
+    ['automationInfo', []]
+  ];
+  var results = [];
+  var pending = probes.length;
+  probes.forEach(function (p) {
+    var name = p[0];
+    if (typeof window.tib[name] !== 'function') { results.push(name + '=缺失'); return done(); }
+    var t0 = Date.now();
+    window.tib[name].apply(null, p[1]).then(function () {
+      results.push(name + '=ok(' + (Date.now() - t0) + 'ms)');
+      done();
+    }, function (e) {
+      var m = (e && e.message) ? e.message : String(e);
+      results.push(name + '=失败[' + m.slice(0, 40) + ']');
+      done();
+    });
+  });
+  function done() {
+    if (--pending > 0) return;
+    report('接口探测：' + results.join(' | '));
   }
 })();
 )JS";

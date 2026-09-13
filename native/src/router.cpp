@@ -1,5 +1,6 @@
 // 原生方法分发：把注入脚本发来的 tib.* 调用路由到窗口 / 设置 / 安全 / 边车
 #include "tib_common.h"
+#include "api.h"
 #include "router.h"
 #include "scheme.h"
 #include "security.h"
@@ -7,6 +8,8 @@
 #include "window.h"
 
 #include <algorithm>
+#include <functional>
+#include <memory>
 
 namespace tib {
 
@@ -68,11 +71,13 @@ bool GetBoolArg(CefRefPtr<CefDictionaryValue> dict, const char* key, bool fallba
 
 namespace {
 
-/** 统一的结果信封：成功 / 失败 */
+/** 统一的结果信封：成功 / 失败 / 已转异步 */
 struct RpcResult {
   bool ok = true;
   std::string body;   // 成功时的 JSON（不含 ok 字段）
   std::string error;  // 失败时的中文原因
+  /** 已交给异步通道（边车转发），调用方不要发回执 */
+  bool deferred = false;
 };
 
 RpcResult Ok(const std::string& body = "") {
@@ -88,16 +93,52 @@ RpcResult Err(const std::string& message) {
   return r;
 }
 
+/** 已交给异步通道（边车转发），调用方不要发回执 */
+RpcResult Deferred() {
+  RpcResult r;
+  r.deferred = true;
+  return r;
+}
+
 /** 设置当前窗口的 UI 状态并推送一次完整状态 */
 RpcResult WithState(TibWindow* window) {
   if (window) window->SyncState();
   return Ok();
 }
 
+/**
+ * 分发一次宿主调用。
+ * @param reply 仅在返回 deferred 结果时由被调用方稍后触发（边车异步转发）。
+ */
 RpcResult Dispatch(TibWindow* window, const std::string& method,
-                   CefRefPtr<CefDictionaryValue> args) {
+                   CefRefPtr<CefDictionaryValue> args,
+                   const std::function<void(bool, const std::string&)>& reply) {
   if (method.empty()) return Err("缺少 method 参数");
   AppContext& ctx = AppContext::Get();
+
+  // 先交给 api.cpp 的全量实现（设置/书签/历史/下载/应用/扩展/账户/指纹/安全/AI 转发…）。
+  // 返回 __error 时转成失败回执；返回 NotMine 时继续走下面的窗口级方法；
+  // 返回 Deferred 时表示结果稍后由 reply 送回，这里不要发回执。
+  {
+    ApiOutcome outcome = ApiOutcome::NotMine;
+    const std::string result = DispatchApi(window, method, args, reply, outcome);
+    if (outcome == ApiOutcome::Deferred) return Deferred();
+    if (outcome == ApiOutcome::Handled) {
+      if (result.rfind("{\"__error\":", 0) == 0) {
+        CefRefPtr<CefValue> parsed;
+        ParseJson(result, parsed);
+        std::string message = "操作失败";
+        if (parsed && parsed->GetType() == VTYPE_DICTIONARY) {
+          CefRefPtr<CefDictionaryValue> d = parsed->GetDictionary();
+          if (d->HasKey("__error") && d->GetType("__error") == VTYPE_STRING) {
+            message = d->GetString("__error").ToString();
+          }
+        }
+        return Err(message);
+      }
+      return Ok(result);
+    }
+  }
 
   // ---------- 不需要窗口 ----------
   if (method == "app.info") {
@@ -319,24 +360,38 @@ void HandleHostCall(CefRefPtr<CefBrowser> browser, const std::string& message) {
           : nullptr;
 
   TibWindow* window = FindWindowByChromeBrowser(browser);
-  const RpcResult result = Dispatch(window, method, args);
+  CefRefPtr<CefBrowser> browser_ref = browser;
 
-  CefRefPtr<CefFrame> frame = browser ? browser->GetMainFrame() : nullptr;
-  if (!frame) {
-    Log("HandleHostCall: 主框架不可用，无法回执（方法 " + method + "）");
+  // 回执函数：同步路径立即用，异步路径（边车转发）由回调稍后触发。
+  // 用 shared_ptr 包住，保证异步分支里对象仍然有效。
+  auto send_reply = std::make_shared<std::function<void(bool, const std::string&)>>();
+  *send_reply = [browser_ref, id, method](bool ok, const std::string& body_or_error) {
+    CefRefPtr<CefFrame> frame = browser_ref ? browser_ref->GetMainFrame() : nullptr;
+    if (!frame || !frame->IsValid()) {
+      Log("HandleHostCall: 主框架不可用，无法回执（方法 " + method + "）");
+      return;
+    }
+    std::string js;
+    if (ok) {
+      js = "window.__tibDeliverReply&&window.__tibDeliverReply(" + std::to_string(id) + ",true," +
+           (body_or_error.empty() ? std::string("null") : "'" + JsonEscape(body_or_error) + "'") +
+           ")";
+    } else {
+      js = "window.__tibDeliverReply&&window.__tibDeliverReply(" + std::to_string(id) +
+           ",false,null,'" + JsonEscape(body_or_error) + "')";
+    }
+    Log("HandleHostCall: 方法=" + method + " id=" + std::to_string(id) +
+        " 结果=" + (ok ? "成功" : "失败(" + body_or_error + ")"));
+    frame->ExecuteJavaScript(js, frame->GetURL(), 0);
+  };
+
+  const RpcResult result = Dispatch(window, method, args, *send_reply);
+  if (result.deferred) {
+    // 结果稍后由回调送回（异步），这里不发回执
+    Log("HandleHostCall: 方法=" + method + " id=" + std::to_string(id) + " 已转异步处理");
     return;
   }
-  std::string js;
-  if (result.ok) {
-    js = "window.__tibDeliverReply&&window.__tibDeliverReply(" + std::to_string(id) + ",true," +
-         (result.body.empty() ? std::string("null") : "'" + JsonEscape(result.body) + "'") + ")";
-  } else {
-    js = "window.__tibDeliverReply&&window.__tibDeliverReply(" + std::to_string(id) +
-         ",false,null,'" + JsonEscape(result.error) + "')";
-  }
-  Log("HandleHostCall: 方法=" + method + " id=" + std::to_string(id) +
-      " 结果=" + (result.ok ? "成功" : "失败(" + result.error + ")"));
-  frame->ExecuteJavaScript(js, frame->GetURL(), 0);
+  (*send_reply)(result.ok, result.ok ? result.body : result.error);
 }
 
 }  // namespace tib

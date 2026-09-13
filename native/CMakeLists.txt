@@ -66,6 +66,8 @@ add_executable(TiBrowser WIN32
   src/service_client.cpp
   src/util.cpp
   src/local_server.cpp
+  src/store.cpp
+  src/api.cpp
   resources/tibrowser.rc   # 图标（来自根目录 ico.png）与版本信息
 )
 
@@ -116,6 +118,25 @@ if(EXISTS "${TIB_UI_DIR}")
     COMMENT "复制浏览器外壳 UI 到输出目录")
 else()
   message(WARNING "未找到 ${TIB_UI_DIR}，请先运行 `npm run ui:build`。程序启动时会显示缺失提示页。")
+endif()
+
+# 边车：把已构建的 Node 服务复制到输出目录 service/
+# 边车是 AI / MCP / OAuth / 办公与开发模式的承载者。未构建时浏览器仍可正常使用，
+# 只是 AI 能力降级（界面上会明确提示"边车未运行"，不会假装可用）。
+set(TIB_SERVICE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../service")
+if(EXISTS "${TIB_SERVICE_DIR}/dist/index.js")
+  add_custom_command(TARGET TiBrowser POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${TIB_SERVICE_DIR}/dist"
+            "$<TARGET_FILE_DIR:TiBrowser>/service"
+    COMMENT "复制边车服务到输出目录")
+  if(EXISTS "${TIB_SERVICE_DIR}/node_modules")
+    add_custom_command(TARGET TiBrowser POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory "${TIB_SERVICE_DIR}/node_modules"
+              "$<TARGET_FILE_DIR:TiBrowser>/service/node_modules"
+      COMMENT "复制边车依赖到输出目录")
+  endif()
+else()
+  message(WARNING "未找到 service/dist/index.js，请先运行 `npm run service:build`。AI 能力将不可用。")
 endif()
 
 # blocklists 资源

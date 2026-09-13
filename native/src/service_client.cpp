@@ -5,6 +5,8 @@
 
 #include <windows.h>
 
+#include <functional>
+
 namespace tib {
 namespace {
 
@@ -37,6 +39,12 @@ int ExtractInt(const std::string& json, const std::string& key) {
 PROCESS_INFORMATION g_service_process{};
 bool g_service_started = false;
 
+/** 读取握手文件里的 bearer token：边车用它做 RPC 鉴权 */
+std::string ReadServiceToken() {
+  const std::string path = AppContext::Get().user_data_dir() + kHandshakeFile;
+  return ExtractString(ReadFileToString(path), "token");
+}
+
 }  // namespace
 
 ServiceState ReadServiceState() {
@@ -61,13 +69,24 @@ ServiceState StartService(const std::string& energy_mode) {
     return current;
   }
 
-  const std::string exe = AppContext::Get().app_dir() + "\\tib-service.exe";
-  if (GetFileAttributesA(exe.c_str()) == INVALID_FILE_ATTRIBUTES) {
-    Log("未找到边车可执行文件 tib-service.exe，AI 能力降级（仅本地功能可用）");
+  // 边车以 Node 脚本形式随浏览器分发：<程序目录>\service\index.js
+  // （Node 是运行边车的前提；缺失时 AI 能力降级，浏览器本身功能不受影响）
+  const std::string script = AppContext::Get().app_dir() + "\\service\\index.js";
+  if (GetFileAttributesA(script.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    Log("未找到边车脚本 service\\index.js，AI 能力降级（仅本地功能可用）");
     return current;
   }
 
-  std::string cmd = "\"" + exe + "\" --headless";
+  // 找一个可用的 node 解释器：优先程序目录内自带，其次 PATH
+  std::string node = AppContext::Get().app_dir() + "\\node.exe";
+  if (GetFileAttributesA(node.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    node = "node";
+  }
+
+  // 显式把用户数据目录传给边车：两侧必须指向同一目录，
+  // 否则握手文件互相看不见（表现为"边车已启动"但"握手超时"）。
+  std::string cmd = "\"" + node + "\" \"" + script + "\" --headless --user-data \"" +
+                    AppContext::Get().user_data_dir() + "\"";
   STARTUPINFOA si{};
   si.cb = sizeof(si);
   PROCESS_INFORMATION pi{};
@@ -106,8 +125,113 @@ std::string ServiceStatusJson() {
          JsonEscape(state.version) + "\",\"mode\":\"" + AppContext::Get().energy_mode() + "\"}";
 }
 
-std::string AutomationInfoJson() {
-  const std::string path = AppContext::Get().user_data_dir() + kAutomationFile;
+bool SidecarReady() { return ReadServiceState().running; }
+
+/**
+ * 边车 RPC 的异步实现。
+ *
+ * 用 CefURLRequest 而不是 WinHTTP：前者走 Chromium 的网络栈，
+ * 与浏览器共享代理/证书设置，行为与页面请求一致。
+ */
+namespace {
+
+/** 从响应体里取出 result / error */
+std::string ExtractSidecarResult(const std::string& body, bool& ok, std::string& error) {
+  ok = false;
+  CefRefPtr<CefValue> root = CefParseJSON(body, JSON_PARSER_RFC);
+  if (!root || root->GetType() != VTYPE_DICTIONARY) {
+    error = "边车返回了无法解析的响应";
+    return "";
+  }
+  CefRefPtr<CefDictionaryValue> d = root->GetDictionary();
+  if (d->HasKey("ok") && d->GetType("ok") == VTYPE_BOOL && d->GetBool("ok")) {
+    ok = true;
+    if (d->HasKey("result")) {
+      return CefWriteJSON(d->GetValue("result"), JSON_WRITER_DEFAULT).ToString();
+    }
+    return "null";
+  }
+  if (d->HasKey("error") && d->GetType("error") == VTYPE_DICTIONARY) {
+    CefRefPtr<CefDictionaryValue> e = d->GetDictionary("error");
+    if (e->HasKey("message") && e->GetType("message") == VTYPE_STRING) {
+      error = e->GetString("message").ToString();
+      return "";
+    }
+  }
+  error = "边车未返回结果";
+  return "";
+}
+
+}  // namespace
+
+void CallSidecarAsync(const std::string& method, const std::string& params,
+                      SidecarCallback callback) {
+  const ServiceState state = ReadServiceState();
+  if (!state.running) {
+    if (callback) callback(false, "边车未运行");
+    return;
+  }
+  const std::string url =
+      "http://127.0.0.1:" + std::to_string(state.port) + "/rpc/" + method;
+
+  CefRefPtr<CefRequest> request = CefRequest::Create();
+  request->SetURL(url);
+  request->SetMethod("POST");
+  CefRequest::HeaderMap headers;
+  headers.insert(std::make_pair("Content-Type", "application/json"));
+  // 握手文件里的 token：边车用它做鉴权
+  headers.insert(std::make_pair("Authorization", "Bearer " + ReadServiceToken()));
+  request->SetHeaderMap(headers);
+  const std::string body = params.empty() ? "{}" : params;
+  CefRefPtr<CefPostData> post = CefPostData::Create();
+  CefRefPtr<CefPostDataElement> element = CefPostDataElement::Create();
+  element->SetToBytes(body.size(), body.data());
+  post->AddElement(element);
+  request->SetPostData(post);
+
+  // 注意：OnRequestComplete 里需要拿到累积的响应体，因此这里用同一个对象做 client
+  class Client : public CefURLRequestClient {
+   public:
+    Client(SidecarCallback cb) : cb_(std::move(cb)) {}
+    void OnRequestComplete(CefRefPtr<CefURLRequest> req) override {
+      bool ok = false;
+      std::string error;
+      std::string result;
+      if (req->GetRequestStatus() == UR_SUCCESS) {
+        const int status = req->GetResponse() ? req->GetResponse()->GetStatus() : 0;
+        if (status >= 200 && status < 300) {
+          result = ExtractSidecarResult(body_, ok, error);
+        } else {
+          // 边车的错误信封也可能带 4xx，先尝试解析
+          result = ExtractSidecarResult(body_, ok, error);
+          if (!ok && error.empty()) error = "边车返回 HTTP " + std::to_string(status);
+        }
+      } else {
+        error = "无法连接边车（请确认 tib-service 已启动）";
+      }
+      if (cb_) cb_(ok, ok ? result : error);
+    }
+    void OnUploadProgress(CefRefPtr<CefURLRequest>, int64_t, int64_t) override {}
+    void OnDownloadProgress(CefRefPtr<CefURLRequest>, int64_t, int64_t) override {}
+    void OnDownloadData(CefRefPtr<CefURLRequest>, const void* data, size_t length) override {
+      body_.append(static_cast<const char*>(data), length);
+    }
+    bool GetAuthCredentials(bool, const CefString&, int, const CefString&, const CefString&,
+                            CefRefPtr<CefAuthCallback>) override {
+      return false;
+    }
+
+   private:
+    SidecarCallback cb_;
+    std::string body_;
+    IMPLEMENT_REFCOUNTING(Client);
+  };
+
+  CefRefPtr<CefURLRequestClient> client = new Client(std::move(callback));
+  CefURLRequest::Create(request, client, nullptr);
+}
+
+std::string AutomationInfoJson() {  const std::string path = AppContext::Get().user_data_dir() + kAutomationFile;
   const std::string json = ReadFileToString(path);
   const bool enabled = !json.empty() && json.find("\"enabled\":true") != std::string::npos;
   const std::string token = ExtractString(json, "token");
