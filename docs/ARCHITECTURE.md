@@ -165,3 +165,34 @@ Turtle.AI-Browser/
 新增字段一律**可选**并在实现中给默认值，保证皮肤/档位降级不崩 UI。
 
 `APP_VERSION = '1.0.0-rc1'`，`APP_BUILD = 260913`，展示格式 `v1.0.0-rc1 (build 260913)`。
+
+
+## 7. 原生外壳实现约束（实测结论，改代码前必读）
+
+以下四条都是本机实测踩出来的，任何一条违反都会表现为「进程在跑但界面空白/直接退出」：
+
+1. **不要使用 `CefMessageRouterBrowserSide`。**
+   在本项目的窗口结构下创建它会在启动期触发 CEF 内部断言
+   （`cef_ref_counted.h:240 Check failed: !needs_adopt_ref_`）导致进程退出。
+   上行通道改用渲染进程 console 消息：注入脚本 `console.log('__TIB_CALL__' + JSON)`，
+   原生侧在 `ChromeClient::OnConsoleMessage` 里接收并分发；下行回执用 `ExecuteJavaScript`
+   调 `window.__tibDeliverReply(...)`。前缀常量 `kHostCallPrefix` 与
+   `src/bootstrap/index.ts` 的 `CALL_PREFIX` 必须一致。
+
+2. **`CefBrowserViewDelegate::GetBrowserRuntimeStyle()` 必须返回 `CEF_RUNTIME_STYLE_ALLOY`。**
+   默认值会被当成 Chrome 风格，Chrome 风格的 BrowserView 不允许挂到 Alloy 风格的 Window 上，
+   CEF 只打印一行 `Cannot add Chrome style BrowserView to Alloy style Window` 然后**静默丢弃视图**。
+
+3. **`CefBrowserView::CreateBrowserView` 的返回值必须用 `.release()` 取裸指针再由 `CefRefPtr` 接管。**
+   用 `.get()` 会触发 `needs_adopt_ref_` 断言；`.release()` 才是正确的所有权转移写法。
+
+4. **资源处理器的 `Open()` 里不要加 `CEF_REQUIRE_IO_THREAD()`。**
+   CEF 150 不保证在 IO 线程调用它，加了会在页面加载时直接 FATAL 崩溃。
+
+另外两条与"看不见的窗口"有关：
+- `CefWindowDelegate::GetInitialBounds()` 必须实现，否则窗口初始位置是 `-21333,-21333`（屏幕外）。
+- CEF 首次创建 Alloy 窗口时会落在最小化状态，`Show()` 之后需要补一次 `Restore()`。
+
+**当前未解决**：窗口能被创建、导航能成功、标签标题能更新，但截屏仍是白屏，
+怀疑 GPU 合成未把 BrowserView 内容画进窗口。下一轮优先排查此项（先试 `--disable-gpu`，
+再查 `OnPaint`/窗口尺寸同步）。

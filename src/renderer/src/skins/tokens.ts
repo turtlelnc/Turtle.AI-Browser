@@ -22,9 +22,13 @@ export type TokenTable = Record<TokenKey, string>
 // ---------------------------------------------------------------------------
 
 /**
- * 各皮肤的下述高度在 CSS 中由 `--tb-tab-h` / `--tb-toolbar-h` / `--tb-bookmark-h` 决定，
- * 这里保留一份 TS 镜像，仅用于 `BrowserState` 缺字段时的兜底计算。
- * **改 CSS 时必须同步改这里**（skinTokens 与 skins/*.css 的数值一一对应）。
+ * 各皮肤外壳高度的 TS 镜像（单位 px），必须与 `skins/*.css` 中的
+ * `--tb-tab-outer-h` / `--tb-toolbar-h` / `--tb-bookmark-h` 一一对应。
+ *
+ * 用途：供**原生侧**（CefWindow 布局、视图定位）与需要预知高度的代码参考。
+ * renderer 自己在运行时是用 `getComputedStyle` 直接读 CSS 变量的（见 App.tsx），
+ * 因此换皮肤不需要改 JS；但原生侧若要同步调整，就应该读这张表。
+ * **改 CSS 时必须同步改这里。**
  */
 export const SKIN_HEIGHTS: Record<string, { tab: number; toolbar: number; bookmark: number }> = {
   tibrowser: { tab: 40, toolbar: 46, bookmark: 32 },

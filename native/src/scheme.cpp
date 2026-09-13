@@ -1,6 +1,8 @@
 // tib:// 协议实现
 #include "scheme.h"
 
+#include "router.h"
+
 #include <algorithm>
 
 namespace tib {
@@ -49,6 +51,59 @@ std::string PercentDecode(const std::string& in) {
     out.push_back(in[i]);
   }
   return out;
+}
+
+/**
+ * 创建 __tibHost 的小垫片：把调用转成 CEF 消息路由的查询。
+ * 与 tib-host.js 分开是因为前者是「传输」，后者是「协议与 API」。
+ */
+std::string HostTransportScript() {
+  return R"JS(
+(function () {
+  window.__tibHost = {
+    call: function (id, method, params) {
+      if (typeof window.tibPreload !== 'function') {
+        console.error('[TiBrowser] 原生消息路由不可用（tibPreload 未注入）');
+        if (window.__tibDeliverReply) {
+          window.__tibDeliverReply(id, false, null, '原生消息路由不可用');
+        }
+        return;
+      }
+      window.tibPreload({
+        request: JSON.stringify({ id: id, method: method, params: params || {} }),
+        persistent: false,
+        onFailure: function (code, message) {
+          if (window.__tibDeliverReply) {
+            window.__tibDeliverReply(id, false, null, message || ('原生调用失败（' + code + '）'));
+          }
+        }
+      });
+    }
+  };
+})();
+)JS";
+}
+
+/** 取引导数据（皮肤 / 主题 / 性能档），供首屏防闪烁 */
+std::string BootDataScript() {
+  const AppContext& ctx = AppContext::Get();
+  return "<script>window.__TIB_BOOT__={skin:'" + ctx.skin() +
+         "',theme:'system',perf:'high'};</script>";
+}
+
+/**
+ * 把宿主脚本内联进 index.html。
+ * 必须在 UI 自身的 module 脚本之前执行，否则 React 首次渲染时拿不到 window.tib，
+ * 会退化到 mock 桥并提示"未检测到原生宿主"。
+ */
+std::string InjectHostBridge(const std::string& html) {
+  const std::string script =
+      "<script>" + HostTransportScript() + "</script>" + "<script>" + HostBridgeScript() +
+      "</script>" + BootDataScript();
+  const std::string marker = "<head>";
+  const size_t pos = html.find(marker);
+  if (pos == std::string::npos) return script + html;
+  return html.substr(0, pos + marker.size()) + "\n" + script + html.substr(pos + marker.size());
 }
 
 /** 资源处理器：从内存缓冲区回给渲染进程 */
@@ -125,7 +180,9 @@ class TibSchemeHandler : public CefResourceHandler {
   bool Open(CefRefPtr<CefRequest> request,
             bool& handle_request,
             CefRefPtr<CefCallback> callback) override {
-    CEF_REQUIRE_IO_THREAD();
+    // 注意：CEF 150 不保证在 IO 线程调用本方法（主文档请求可能在 UI 线程），
+    // 这里刻意不加 CEF_REQUIRE_IO_THREAD()——加了会在页面加载时直接断言崩溃。
+    // 处理器本身无可变共享状态，且未缓存跨线程数据，故不需要线程亲和。
     const std::string url = request->GetURL().ToString();
     const std::string path = ResolveTibResource(url);
     if (path.empty()) {
@@ -142,6 +199,10 @@ class TibSchemeHandler : public CefResourceHandler {
       return true;
     }
     mime_ = MimeForPath(path);
+    // HTML 入口必须内联宿主脚本：window.tib / window.__tibHost / 首屏引导数据
+    if (mime_ == "text/html") {
+      body_ = InjectHostBridge(body_);
+    }
     status_ = 200;
     return true;
   }

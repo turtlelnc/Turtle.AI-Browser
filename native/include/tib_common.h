@@ -52,6 +52,9 @@ struct TabInfo {
   bool secure = true;
   bool is_new_tab = true;
   bool blocked = false;
+  /** 被拦截时的分类与中文原因（供 UI 展示拦截页） */
+  std::string block_category;
+  std::string block_reason;
   double zoom = 0.0;
 };
 
@@ -84,6 +87,10 @@ class AppContext {
   const std::string& user_data_dir() const { return user_data_dir_; }
   void set_user_data_dir(const std::string& v) { user_data_dir_ = v; }
 
+  /** 启动时自动打开的地址（--url= 开关，缺省为新标签页） */
+  const std::string& startup_url() const { return startup_url_; }
+  void set_startup_url(const std::string& v) { startup_url_ = v; }
+
  private:
   bool incognito_ = false;
   std::string protection_level_ = "standard";
@@ -91,6 +98,7 @@ class AppContext {
   std::string skin_ = "tibrowser";
   std::string app_dir_;
   std::string user_data_dir_;
+  std::string startup_url_;
 };
 
 /** 生成一个短随机 id（标签页标识，不追求密码学强度） */

@@ -40,6 +40,9 @@ CefRefPtr<CefValue> AsValue(CefRefPtr<CefListValue> list) {
 /** 颜色：深浅两套主题的窗口底色 */
 constexpr uint32_t kBgColor = 0xFF1C1C1E;
 
+/** 上行调用前缀：必须与 src/bootstrap/index.ts 的 CALL_PREFIX 保持一致 */
+constexpr char kHostCallPrefix[] = "__TIB_CALL__";
+
 }  // namespace
 
 struct TibWindow::Tab {
@@ -47,6 +50,8 @@ struct TibWindow::Tab {
   TabInfo info;
   CefRefPtr<CefBrowserView> view;
   CefRefPtr<PageClient> client;
+  /** 待打开的地址：浏览器就绪后由 OnTabCreated 执行 */
+  std::string pending_url;
 };
 
 // ---------------------------------------------------------------- 标签页
@@ -61,7 +66,17 @@ std::string TibWindow::CreateTab(const std::string& input, bool activate) {
 
   CefRefPtr<PageClient> client = new PageClient(this, id);
   tab->client = client;
-  Log("CreateTab: PageClient 就绪");
+
+  // 关键顺序：pending_url 必须在 CreateBrowserView 之前赋值。
+  // PageClient::OnAfterCreated / PageViewDelegate::OnBrowserCreated 是在
+  // CreateBrowserView 内部**同步**触发的，那时如果 pending_url 还没写，
+  // 首次导航就会被静默丢弃（表现为标签页停在 tib://newtab）。
+  if (!input.empty()) {
+    tab->pending_url = ResolveNavigationInput(input, "bing");
+    Log("CreateTab: 待导航地址 " + tab->pending_url);
+  }
+  // 先把标签登记进列表，回调里才能反查到
+  tabs_.push_back(tab);
 
   // 每个标签页一个独立 BrowserView；无痕窗口使用内存态 RequestContext
   CefRefPtr<CefRequestContext> context;
@@ -77,14 +92,13 @@ std::string TibWindow::CreateTab(const std::string& input, bool activate) {
   // 注意：CefBrowserView::CreateBrowserView 返回的是**新创建**的引用；
   // 直接赋给 CefRefPtr 会触发 "Check failed: !needs_adopt_ref_" 断言，
   // 必须先取出裸指针，让 CefRefPtr 走 adopt 语义。
+  // 委托必须是 PageViewDelegate（声明 Alloy 风格），否则视图会被窗口拒绝挂载。
   CefBrowserView* raw_view =
       CefBrowserView::CreateBrowserView(client, "tib://newtab", browser_settings, nullptr, context,
-                                        this)
+                                        new PageViewDelegate(this, id))
           .release();
   Log("CreateTab: BrowserView 已创建");
   tab->view = raw_view;
-  tabs_.push_back(tab);
-  Log("CreateTab: 已加入标签列表");
 
   if (!active_id_.empty() && content_view_) {
     content_view_->SetVisible(false);
@@ -97,10 +111,19 @@ std::string TibWindow::CreateTab(const std::string& input, bool activate) {
   content_view_ = raw_view;
   window_->AddChildView(content_view_);
   Layout();
+  Log("CreateTab: 已加入标签列表并完成布局");
 
-  if (!input.empty()) {
-    Navigate(input);
+  // 若回调已把 pending_url 消费掉则不重复导航；否则说明视图就绪回调晚于此处，
+  // 由后续 OnTabCreated 负责执行。
+  if (!tab->pending_url.empty() && raw_view && raw_view->GetBrowser() &&
+      raw_view->GetBrowser()->GetMainFrame()) {
+    const std::string url = tab->pending_url;
+    tab->pending_url.clear();
+    tab->info.is_new_tab = false;
+    Log("CreateTab: 视图已就绪，立即导航 " + url);
+    raw_view->GetBrowser()->GetMainFrame()->LoadURL(url);
   }
+
   if (!activate) {
     // 后台打开：保持原激活标签不变（简化实现：立即切回第一个）
     if (tabs_.size() > 1) ActivateTab(tabs_.front()->id);
@@ -259,6 +282,55 @@ void TibWindow::Close() {
   if (window_) window_->Close();
 }
 
+void TibWindow::Minimize() {
+  if (window_) window_->Minimize();
+}
+
+void TibWindow::Maximize() {
+  if (!window_) return;
+  if (window_->IsMaximized()) {
+    window_->Restore();
+  } else {
+    window_->Maximize();
+  }
+  SyncState();
+}
+
+void TibWindow::Restore() {
+  if (!window_) return;
+  window_->Restore();
+  SyncState();
+}
+
+void TibWindow::SetOverlayOpen(bool open) {
+  overlay_open_ = open;
+  Layout();
+  SyncState();
+}
+
+void TibWindow::SetFindOpen(bool open) {
+  if (find_open_ == open) return;
+  find_open_ = open;
+  Layout();
+  SyncState();
+}
+
+void TibWindow::ToggleSidebar(double width) {
+  if (sidebar_width_ > 0) {
+    sidebar_width_ = 0;
+  } else {
+    sidebar_width_ = static_cast<int>(width > 0 ? width : kSidebarWidth);
+  }
+  Layout();
+  SyncState();
+}
+
+void TibWindow::SetSidebarWidth(int width) {
+  sidebar_width_ = width > 0 ? width : 0;
+  Layout();
+  SyncState();
+}
+
 // ---------------------------------------------------------------- 布局
 
 void TibWindow::Layout() {
@@ -286,17 +358,13 @@ void TibWindow::Layout() {
 // ---------------------------------------------------------------- 事件
 
 void TibWindow::SendEvent(const std::string& name, CefRefPtr<CefValue> payload) {
-  CefRefPtr<CefBrowser> chrome = chrome_browser();
-  if (!chrome) return;
-  CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create("tib.event");
-  CefRefPtr<CefListValue> args = message->GetArgumentList();
-  args->SetSize(2);
-  args->SetString(0, name);
-  args->SetString(1, payload ? ToJson(payload) : "{}");
-  chrome->GetMainFrame()->SendProcessMessage(PID_RENDERER, message);
+  // 通过注入脚本的入口投递，避免与网页消息通道耦合
+  const std::string json = payload ? ToJson(payload) : "{}";
+  RunInChrome("window.__tibDeliverEvent && window.__tibDeliverEvent('" + JsonEscape(name) + "','" +
+              JsonEscape(json) + "')");
 }
 
-void TibWindow::SyncState() {
+std::string TibWindow::GetStateJson() {
   CefRefPtr<CefDictionaryValue> root = CefDictionaryValue::Create();
   CefRefPtr<CefListValue> list = CefListValue::Create();
   for (size_t i = 0; i < tabs_.size(); ++i) {
@@ -312,17 +380,69 @@ void TibWindow::SyncState() {
     t->SetBool("canGoForward", info.can_go_forward);
     t->SetBool("isSecure", info.secure);
     t->SetBool("isNewTab", info.is_new_tab);
-    t->SetBool("blocked", info.blocked);
+    t->SetBool("incognito", incognito_);
     t->SetDouble("zoomLevel", info.zoom);
+    if (info.blocked) {
+      CefRefPtr<CefDictionaryValue> verdict = CefDictionaryValue::Create();
+      verdict->SetBool("blocked", true);
+      verdict->SetString("category", info.block_category);
+      verdict->SetString("reason", info.block_reason);
+      t->SetValue("blocked", AsValue(verdict));
+    } else {
+      t->SetNull("blocked");
+    }
     list->SetValue(i, AsValue(t));
   }
   root->SetValue("tabs", AsValue(list));
+
+  const TabInfo* active = nullptr;
+  for (const auto& tab : tabs_) {
+    if (tab->id == active_id_) active = &tab->info;
+  }
+
   root->SetString("activeTabId", active_id_);
+  // CefWindow 没有稳定的数字标识；用 Chrome 浏览器的标识符作为窗口标识
+  CefRefPtr<CefBrowser> chrome_browser_for_id = chrome_browser();
+  root->SetInt("windowId", chrome_browser_for_id ? chrome_browser_for_id->GetIdentifier() : 0);
+  root->SetBool("sidebarOpen", sidebar_width_ > 0);
+  root->SetInt("sidebarWidth", sidebar_width_);
+  root->SetString("overlay", overlay_open_ ? "settings" : "");
+  root->SetBool("isMaximized", window_ ? window_->IsMaximized() : false);
+  root->SetBool("isFullscreen", window_ ? window_->IsFullscreen() : false);
   root->SetBool("isIncognito", incognito_);
-  root->SetString("skin", AppContext::Get().skin());
-  root->SetString("protectionLevel", AppContext::Get().protection_level());
-  root->SetString("energyMode", AppContext::Get().energy_mode());
-  SendEvent("state", AsValue(root));
+  root->SetBool("canGoBack", active ? active->can_go_back : false);
+  root->SetBool("canGoForward", active ? active->can_go_forward : false);
+  root->SetBool("isLoading", active ? active->loading : false);
+
+  // 设置快照：字段与 src/shared/bridge.ts 的 TibSettings 对齐
+  CefRefPtr<CefDictionaryValue> settings = CefDictionaryValue::Create();
+  settings->SetString("searchEngine", "bing");
+  settings->SetString("homepage", "https://www.bing.com");
+  settings->SetString("theme", "system");
+  settings->SetString("skin", AppContext::Get().skin());
+  settings->SetString("perf", "high");
+  settings->SetBool("bookmarkBarVisible", true);
+  settings->SetBool("showHomeButton", true);
+  settings->SetBool("restoreSession", false);
+  settings->SetString("cliPermission", "daily");
+  settings->SetBool("aiEnabled", true);
+  settings->SetBool("serviceAutoStart", true);
+  root->SetValue("settings", AsValue(settings));
+
+  return ToJson(AsValue(root));
+}
+
+void TibWindow::RunInChrome(const std::string& js) {
+  CefRefPtr<CefBrowser> chrome = chrome_browser();
+  if (chrome && chrome->GetMainFrame()) {
+    chrome->GetMainFrame()->ExecuteJavaScript(js, chrome->GetMainFrame()->GetURL(), 0);
+  }
+}
+
+void TibWindow::SyncState() {
+  const std::string json = GetStateJson();
+  RunInChrome("window.__tibDeliverEvent && window.__tibDeliverEvent('state', JSON.stringify(" + json +
+              "))");
 }
 
 void TibWindow::OnTabTitle(const std::string& tab_id, const std::string& title) {
@@ -331,6 +451,7 @@ void TibWindow::OnTabTitle(const std::string& tab_id, const std::string& title) 
   if (it == tabs_.end()) return;
   (*it)->info.title = title.empty() ? "新标签页" : title;
   (*it)->info.is_new_tab = false;
+  Log("标签页标题更新：" + (*it)->info.title);
   SyncState();
 }
 
@@ -362,14 +483,35 @@ void TibWindow::OnTabFavicon(const std::string& tab_id, const std::string& url) 
   SyncState();
 }
 
+void TibWindow::OnBrowserViewCreated(CefRefPtr<CefBrowserView> browser_view,
+                                     CefRefPtr<CefBrowser> browser) {
+  (void)browser_view;
+  // 找出该视图对应的标签页并执行挂起的首次导航
+  for (const auto& tab : tabs_) {
+    if (tab->view && tab->view->GetBrowser() &&
+        browser && tab->view->GetBrowser()->IsSame(browser)) {
+      OnTabCreated(tab->id, browser, tab->client);
+      return;
+    }
+  }
+}
+
 void TibWindow::OnTabCreated(const std::string& tab_id, CefRefPtr<CefBrowser> browser,
                              CefRefPtr<PageClient> client) {
   const auto it = std::find_if(tabs_.begin(), tabs_.end(),
                                [&](const std::shared_ptr<Tab>& t) { return t->id == tab_id; });
   if (it == tabs_.end()) return;
-  // 消息路由只服务外壳 UI；网页视图不开路由，避免网页调用内部 API
-  (void)browser;
   (void)client;
+  Log("OnTabCreated: 网页视图就绪 id=" + tab_id + " 视图已挂载=" +
+      (((*it)->view != nullptr) ? "是" : "否"));
+  // 浏览器此时才真正就绪，执行创建时挂起的首次导航
+  if (!(*it)->pending_url.empty() && browser && browser->GetMainFrame()) {
+    const std::string url = (*it)->pending_url;
+    (*it)->pending_url.clear();
+    (*it)->info.is_new_tab = false;
+    Log("首个导航：" + url);
+    browser->GetMainFrame()->LoadURL(url);
+  }
 }
 
 void TibWindow::OnTabClosed(const std::string& tab_id) {
@@ -391,15 +533,9 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   window->SetTitle(TIB_PRODUCT_NAME);
   Log("OnWindowCreated: 窗口已创建");
 
-  // 消息路由：服务外壳 UI 的 tib.* 查询（网页视图不挂，避免网页调用内部 API）
-  router_ = CreateTibRouter();
-  router_->AddHandler(CreateTibQueryHandler(), true);
-  Log("OnWindowCreated: 消息路由已就绪");
-
   CefBrowserSettings chrome_settings;
   chrome_settings.background_color = kBgColor;
   chrome_client_ = new ChromeClient(this);
-  chrome_client_->set_router(router_);
   Log("OnWindowCreated: ChromeClient 就绪");
   // 同上：新建引用必须取出裸指针再交给 CefRefPtr（adopt 语义）
   CefBrowserView* raw_chrome =
@@ -410,11 +546,20 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   window->AddChildView(chrome_view_);
   Log("OnWindowCreated: 外壳 UI 视图已挂载");
   window->Show();
+  window->Activate();
+  // 本机实测：CEF 首次创建 Alloy 窗口时会落到"最小化"状态（IsWindowVisible 为真但
+  // IsIconic 为真、位置停在 -21333,-21333），桌面看不到窗口。这里显式恢复一次。
+  // 无条件恢复一次：本机 CEF 首窗会落在最小化状态，Show() 不一定解除
+  window->Restore();
+  Log("OnWindowCreated: 已请求恢复窗口");
+  Log("OnWindowCreated: 窗口已显示");
 
   // 首个标签页
-  CreateTab("", true);
+  // 首个标签页：命令行给了 --url= 就直接打开，否则新标签页
+  CreateTab(AppContext::Get().startup_url(), true);
+  Log("OnWindowCreated: 标签页已建");
   Layout();
-  Log("OnWindowCreated: 完成");
+  Log("OnWindowCreated: 布局完成");
 }
 
 void TibWindow::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
@@ -442,6 +587,24 @@ void TibWindow::OnWindowBoundsChanged(CefRefPtr<CefWindow> window,
   Layout();
 }
 
+CefRect TibWindow::GetInitialBounds(CefRefPtr<CefWindow> window) {
+  // 居中到主显示器工作区，默认 1200x800（工作区不足时等比缩小）
+  const int kWidth = 1200;
+  const int kHeight = 800;
+  CefRect work(0, 0, 1280, 800);
+  if (window) {
+    CefRefPtr<CefDisplay> display = window->GetDisplay();
+    if (display) work = display->GetBounds();
+  }
+  const int width = std::min(kWidth, std::max(640, work.width - 80));
+  const int height = std::min(kHeight, std::max(480, work.height - 80));
+  const int x = work.x + (work.width - width) / 2;
+  const int y = work.y + (work.height - height) / 2;
+  Log("窗口初始位置：" + std::to_string(x) + "," + std::to_string(y) + " " +
+      std::to_string(width) + "x" + std::to_string(height));
+  return CefRect(x, y, width, height);
+}
+
 void TibWindow::OnBrowserCreated(CefRefPtr<CefBrowserView> browser_view,
                                  CefRefPtr<CefBrowser> browser) {
   if (browser_view == chrome_view_) {
@@ -450,14 +613,11 @@ void TibWindow::OnBrowserCreated(CefRefPtr<CefBrowserView> browser_view,
   }
 }
 
-CefRefPtr<CefMessageRouterBrowserSide> TibWindow::EnsureRouter() {
-  if (!router_) {
-    CefMessageRouterConfig config;
-    config.js_query_function = "tibQuery";
-    config.js_cancel_function = "tibQueryCancel";
-    router_ = CefMessageRouterBrowserSide::Create(config);
-  }
-  return router_;
+void PageViewDelegate::OnBrowserCreated(CefRefPtr<CefBrowserView> browser_view,
+                                        CefRefPtr<CefBrowser> browser) {
+  // 直接带着 tab_id 回调：此时 view->GetBrowser() 可能还没就绪，靠反查会漏掉
+  (void)browser_view;
+  if (window_) window_->OnTabCreated(tab_id_, browser, nullptr);
 }
 
 // ---------------------------------------------------------------- 客户端实现
@@ -469,14 +629,20 @@ void ChromeClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   if (window_) window_->SyncState();
 }
 
-bool ChromeClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                           CefRefPtr<CefFrame> frame,
-                                           CefProcessId source_process,
-                                           CefRefPtr<CefProcessMessage> message) {
-  if (router_ && router_->OnProcessMessageReceived(browser, frame, source_process, message)) {
-    return true;
-  }
-  return false;
+bool ChromeClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
+                                    cef_log_severity_t level,
+                                    const CefString& message,
+                                    const CefString& source,
+                                    int line) {
+  (void)browser;
+  (void)level;
+  (void)source;
+  (void)line;
+  const std::string text = message.ToString();
+  if (text.rfind(kHostCallPrefix, 0) != 0) return false;
+  HandleHostCall(window_ ? window_->chrome_browser() : nullptr,
+                 text.substr(sizeof(kHostCallPrefix) - 1));
+  return true;  // 已消费，不再打印到日志
 }
 
 void ChromeClient::SendEvent(const std::string& name, CefRefPtr<CefValue> payload) {

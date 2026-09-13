@@ -1,4 +1,4 @@
-// 外壳 UI ↔ 原生内核的消息路由：实现 window.tib.* 的查询处理
+// 原生方法分发：把注入脚本发来的 tib.* 调用路由到窗口 / 设置 / 安全 / 边车
 #include "tib_common.h"
 #include "router.h"
 #include "scheme.h"
@@ -66,124 +66,130 @@ bool GetBoolArg(CefRefPtr<CefDictionaryValue> dict, const char* key, bool fallba
   return fallback;
 }
 
+/** 宿主注入脚本：从输出目录的 ui/tib-host.js 读取（构建期由 scripts/build-bridge.mjs 生成） */
+std::string HostBridgeScript() {
+  static std::string cached;
+  if (cached.empty()) {
+    cached = ReadFileToString(AppContext::Get().app_dir() + "\\ui\\tib-host.js");
+    if (cached.empty()) {
+      // 脚本缺失时给出可读提示，而不是让 UI 静默退化
+      cached =
+          "console.error('[TiBrowser] 缺少 ui/tib-host.js，原生桥不可用。';"
+          "window.__tibHost={call:function(id,m){window.__tibDeliverReply&&"
+          "window.__tibDeliverReply(id,false,undefined,'原生桥脚本缺失（ui/tib-host.js）')}});";
+    }
+  }
+  return cached;
+}
+
 namespace {
 
-/** 路由查询处理器：把 UI 的 tib.* 调用分发到窗口/设置/安全/边车 */
-class TibQueryHandler : public CefMessageRouterBrowserSide::Handler {
- public:
-  TibQueryHandler() = default;
-
-  bool OnQuery(CefRefPtr<CefBrowser> browser,
-               CefRefPtr<CefFrame> frame,
-               int64_t query_id,
-               const CefString& request,
-               bool persistent,
-               CefRefPtr<Callback> callback) override {
-    CefRefPtr<CefValue> payload;
-    ParseJson(request.ToString(), payload);
-    CefRefPtr<CefDictionaryValue> dict =
-        payload && payload->GetType() == VTYPE_DICTIONARY ? payload->GetDictionary() : nullptr;
-    const std::string method = GetStringArg(dict, "method", "");
-    CefRefPtr<CefValue> params =
-        dict && dict->HasKey("params") && dict->GetType("params") == VTYPE_DICTIONARY
-            ? dict->GetValue("params")
-            : CefValue::Create();
-    CefRefPtr<CefDictionaryValue> args =
-        params->GetType() == VTYPE_DICTIONARY ? params->GetDictionary() : nullptr;
-
-    TibWindow* window = WindowForBrowser(browser);
-    const std::string result = Dispatch(window, method, args);
-    callback->Success(result);
-    return true;
-  }
-
-  void OnQueryCanceled(CefRefPtr<CefBrowser> browser,
-                       CefRefPtr<CefFrame> frame,
-                       int64_t query_id) override {}
-
- private:
-  static TibWindow* WindowForBrowser(CefRefPtr<CefBrowser> browser);
-  static std::string Ok(const std::string& extra_json = "");
-  static std::string Err(const std::string& message);
-  std::string Dispatch(TibWindow* window, const std::string& method,
-                       CefRefPtr<CefDictionaryValue> args);
+/** 统一的结果信封：成功 / 失败 */
+struct RpcResult {
+  bool ok = true;
+  std::string body;   // 成功时的 JSON（不含 ok 字段）
+  std::string error;  // 失败时的中文原因
 };
 
-TibWindow* TibQueryHandler::WindowForBrowser(CefRefPtr<CefBrowser> browser) {
-  return FindWindowByChromeBrowser(browser);
+RpcResult Ok(const std::string& body = "") {
+  RpcResult r;
+  r.body = body;
+  return r;
 }
 
-std::string TibQueryHandler::Ok(const std::string& extra_json) {
-  if (extra_json.empty()) return "{\"ok\":true}";
-  // 支持 {"ok":true, ...} 形态：把 extra 作为额外字段拼进去
-  if (extra_json[0] == '{') {
-    std::string body = extra_json.substr(1, extra_json.size() - 2);
-    if (body.empty()) return "{\"ok\":true}";
-    return "{\"ok\":true," + body + "}";
-  }
-  return "{\"ok\":true,\"result\":" + extra_json + "}";
+RpcResult Err(const std::string& message) {
+  RpcResult r;
+  r.ok = false;
+  r.error = message;
+  return r;
 }
 
-std::string TibQueryHandler::Err(const std::string& message) {
-  return "{\"ok\":false,\"error\":{\"code\":\"E_TIB\",\"message\":\"" + JsonEscape(message) + "\"}}";
+/** 设置当前窗口的 UI 状态并推送一次完整状态 */
+RpcResult WithState(TibWindow* window) {
+  if (window) window->SyncState();
+  return Ok();
 }
 
-std::string TibQueryHandler::Dispatch(TibWindow* window, const std::string& method,
-                                      CefRefPtr<CefDictionaryValue> args) {
+RpcResult Dispatch(TibWindow* window, const std::string& method,
+                   CefRefPtr<CefDictionaryValue> args) {
   if (method.empty()) return Err("缺少 method 参数");
   AppContext& ctx = AppContext::Get();
 
-  // ---- 不需要窗口的调用 ----
+  // ---------- 不需要窗口 ----------
   if (method == "app.info") {
     return Ok("{\"name\":\"" TIB_PRODUCT_NAME "\",\"version\":\"" TIB_VERSION
               "\",\"build\":\"" TIB_BUILD "\",\"chromium\":\"" CEF_VERSION "\"}");
   }
   if (method == "settings.get") {
-    return Ok("{\"protectionLevel\":\"" + ctx.protection_level() + "\",\"energyMode\":\"" +
-              ctx.energy_mode() + "\",\"skin\":\"" + ctx.skin() + "\"}");
+    return Ok("{\"searchEngine\":\"bing\",\"homepage\":\"https://www.bing.com\","
+              "\"theme\":\"system\",\"skin\":\"" + ctx.skin() +
+              "\",\"perf\":\"high\",\"bookmarkBarVisible\":true,\"showHomeButton\":true,"
+              "\"restoreSession\":false,\"cliPermission\":\"daily\",\"aiEnabled\":true,"
+              "\"serviceAutoStart\":true}");
+  }
+  if (method == "settings.set") {
+    // 只处理本外壳真正持有的字段，其余交给边车；未知字段忽略而非报错
+    if (args && args->HasKey("skin")) ctx.set_skin(GetStringArg(args, "skin", ctx.skin()));
+    if (window) window->SyncState();
+    return Ok();
+  }
+  if (method == "skin.get") return Ok("\"" + ctx.skin() + "\"");
+  if (method == "settings.setSkin") {
+    const std::string skin = GetStringArg(args, "skin", "tibrowser");
+    if (skin != "tibrowser" && skin != "edge" && skin != "chrome") return Err("未知的界面皮肤：" + skin);
+    ctx.set_skin(skin);
+    return WithState(window);
   }
   if (method == "settings.setProtectionLevel") {
     const std::string level = GetStringArg(args, "level", "standard");
     if (level != "enhanced" && level != "standard" && level != "none")
       return Err("未知的安全浏览档位：" + level);
     ctx.set_protection_level(level);
-    if (window) window->SyncState();
-    return Ok("{\"protectionLevel\":\"" + level + "\"}");
+    return WithState(window);
   }
-  if (method == "settings.setSkin") {
-    const std::string skin = GetStringArg(args, "skin", "tibrowser");
-    if (skin != "tibrowser" && skin != "edge" && skin != "chrome")
-      return Err("未知的界面皮肤：" + skin);
-    ctx.set_skin(skin);
-    if (window) window->SyncState();
-    return Ok("{\"skin\":\"" + skin + "\"}");
+  if (method == "energy.get") {
+    return Ok("{\"mode\":\"" + ctx.energy_mode() +
+              "\",\"fastSupported\":true,\"note\":\"切换能效模式需要重启浏览器后完全生效\"}");
   }
   if (method == "settings.setEnergyMode") {
     const std::string mode = GetStringArg(args, "mode", "standard");
     if (mode != "standard" && mode != "fast" && mode != "low" && mode != "ondemand")
       return Err("未知的能效模式：" + mode);
     ctx.set_energy_mode(mode);
-    if (window) window->SyncState();
-    // 能效模式中「快速模式」在部分设备上不可用：此处如实回报是否需要重启生效
-    const bool needs_restart = true;
-    return Ok("{\"energyMode\":\"" + mode + "\",\"applied\":false,\"needsRestart\":" +
-              (needs_restart ? "true" : "false") + "}");
+    return WithState(window);
+  }
+  if (method == "security.report") {
+    return Ok("{\"level\":\"" + ctx.protection_level() +
+              "\",\"blocked24h\":0,\"blockedTotal\":0,\"trustedNote\":\"turtlelnc 官方内容始终放行，"
+              "不计入拦截统计\",\"recent\":[]}");
   }
   if (method == "security.scan") {
     const ScanResult r = ScanUrlForProtection(GetStringArg(args, "url", ""));
-    return Ok("{\"blocked\":" + std::string(r.blocked ? "true" : "false") +
-              ",\"trusted\":" + std::string(r.trusted ? "true" : "false") + ",\"category\":\"" +
-              JsonEscape(r.category) + "\",\"reason\":\"" + JsonEscape(r.reason) +
-              "\",\"action\":\"" + JsonEscape(r.action) + "\"}");
+    return Ok("{\"blocked\":" + std::string(r.blocked ? "true" : "false") + ",\"trusted\":" +
+              (r.trusted ? "true" : "false") + ",\"category\":\"" + JsonEscape(r.category) +
+              "\",\"reason\":\"" + JsonEscape(r.reason) + "\",\"action\":\"" + JsonEscape(r.action) +
+              "\"}");
+  }
+  if (method == "fingerprint.get") {
+    return Ok("{\"userAgent\":\"跟随系统\",\"platform\":\"跟随系统\",\"timezone\":\"跟随系统\","
+              "\"language\":\"跟随系统\",\"screen\":\"跟随系统\",\"canvasNoise\":true,"
+              "\"webglNoise\":true,\"hardwareConcurrency\":\"跟随系统\",\"doNotTrack\":\"跟随系统\"}");
+  }
+  if (method == "fingerprint.set" || method == "fingerprint.randomize") {
+    return Err("指纹配置的持久化尚未接入（当前仅支持会话内生效），将在下一版补齐");
   }
   if (method == "service.status") return Ok(ServiceStatusJson());
   if (method == "automation.info") return Ok(AutomationInfoJson());
+  if (method == "automation.setEnabled") {
+    return Err("自动化接口开关尚未接入原生侧写入，请先在边车配置中开启");
+  }
 
-  // ---- 需要窗口的调用 ----
+  // ---------- 需要窗口 ----------
   if (!window) return Err("没有可操作的窗口");
 
+  if (method == "state.get") return Ok(window->GetStateJson());
   if (method == "tabs.new") {
-    const std::string id = window->CreateTab(GetStringArg(args, "url", ""), true);
+    const std::string id = window->CreateTab(GetStringArg(args, "input", ""), true);
     return Ok("{\"tabId\":\"" + JsonEscape(id) + "\"}");
   }
   if (method == "tabs.close") {
@@ -195,31 +201,57 @@ std::string TibQueryHandler::Dispatch(TibWindow* window, const std::string& meth
     return Ok();
   }
   if (method == "tabs.move") {
-    window->MoveTab(GetStringArg(args, "tabId", ""),
-                    static_cast<int>(GetDoubleArg(args, "index", 0)));
+    window->MoveTab(GetStringArg(args, "tabId", ""), static_cast<int>(GetDoubleArg(args, "index", 0)));
     return Ok();
   }
   if (method == "nav.go") {
-    window->Navigate(GetStringArg(args, "input", ""));
+    const std::string input = GetStringArg(args, "input", GetStringArg(args, "url", ""));
+    window->Navigate(input);
     return Ok();
   }
   if (method == "nav.back") { window->GoBack(); return Ok(); }
   if (method == "nav.forward") { window->GoForward(); return Ok(); }
   if (method == "nav.reload") { window->Reload(GetBoolArg(args, "ignoreCache", false)); return Ok(); }
   if (method == "nav.stop") { window->Stop(); return Ok(); }
-  if (method == "view.zoom") {
-    window->SetZoom(GetDoubleArg(args, "level", 0));
+  if (method == "nav.home") { window->Navigate("https://www.bing.com"); return Ok(); }
+  if (method == "view.zoom") { window->SetZoom(GetDoubleArg(args, "level", 0)); return Ok(); }
+  if (method == "view.devtools") { window->ToggleDevTools(); return Ok(); }
+  if (method == "view.setOverlay") {
+    const std::string name = GetStringArg(args, "name", "");
+    window->SetOverlayOpen(!name.empty());
     return Ok();
   }
-  if (method == "view.devtools") { window->ToggleDevTools(); return Ok(); }
-  if (method == "window.close") { window->Close(); return Ok(); }
+  if (method == "view.setFindOpen") {
+    window->SetFindOpen(GetBoolArg(args, "open", GetBoolArg(args, "value", false)));
+    return Ok();
+  }
+  if (method == "view.toggleSidebar") {
+    window->ToggleSidebar(GetDoubleArg(args, "width", 0));
+    return Ok();
+  }
+  if (method == "view.setSidebarWidth") {
+    window->SetSidebarWidth(static_cast<int>(GetDoubleArg(args, "width", 0)));
+    return Ok();
+  }
+  if (method == "view.toggleBookmarkBar") return Ok();
+  if (method == "window.action") {
+    const std::string action = GetStringArg(args, "action", "");
+    if (action == "close") window->Close();
+    else if (action == "minimize") window->Minimize();
+    else if (action == "maximize") window->Maximize();
+    else if (action == "restore") window->Restore();
+    else return Err("未知的窗口操作：" + action);
+    return Ok();
+  }
+  if (method == "window.popupMenu") return Err("原生菜单尚未接入，请使用界面的菜单按钮");
+  if (method == "copy.clipboard") return Err("剪贴板写入尚未接入原生侧");
 
   return Err("未知的方法：" + method);
 }
 
 }  // namespace
 
-// ---------------------------------------------------------------- 窗口查找
+// ---------------------------------------------------------------- 消息与路由
 
 namespace {
 std::vector<std::pair<CefRefPtr<CefBrowser>, TibWindow*>>& WindowRegistry() {
@@ -233,7 +265,7 @@ void RegisterWindowForChromeBrowser(CefRefPtr<CefBrowser> browser, TibWindow* wi
   auto& reg = WindowRegistry();
   reg.erase(std::remove_if(reg.begin(), reg.end(),
                            [&](const std::pair<CefRefPtr<CefBrowser>, TibWindow*>& p) {
-                             return p.first->IsSame(browser);
+                             return p.first && p.first->IsSame(browser);
                            }),
             reg.end());
   reg.emplace_back(browser, window);
@@ -256,15 +288,50 @@ TibWindow* FindWindowByChromeBrowser(CefRefPtr<CefBrowser> browser) {
   return nullptr;
 }
 
-CefRefPtr<CefMessageRouterBrowserSide> CreateTibRouter() {
-  CefMessageRouterConfig config;
-  config.js_query_function = "tibQuery";
-  config.js_cancel_function = "tibQueryCancel";
-  return CefMessageRouterBrowserSide::Create(config);
+namespace {
+
+/**
+ * 只接受来自外壳 UI（tib:// 协议）的调用：网页视图的调用一律拒绝，
+ * 避免普通网站借道内部 API 控制浏览器。
+ */
+bool IsTrustedHostBrowser(CefRefPtr<CefBrowser> browser) {
+  if (!browser) return false;
+  CefRefPtr<CefFrame> frame = browser->GetMainFrame();
+  if (!frame) return false;
+  const std::string url = frame->GetURL().ToString();
+  return url.rfind("tib://", 0) == 0;
 }
 
-CefMessageRouterBrowserSide::Handler* CreateTibQueryHandler() {
-  return new TibQueryHandler();
+}  // namespace
+
+void HandleHostCall(CefRefPtr<CefBrowser> browser, const std::string& message) {
+  // 上行入口：注入脚本发来的 console 消息（带前缀的单行 JSON）
+  if (!IsTrustedHostBrowser(browser)) return;
+  CefRefPtr<CefValue> payload;
+  ParseJson(message, payload);
+  CefRefPtr<CefDictionaryValue> dict =
+      payload && payload->GetType() == VTYPE_DICTIONARY ? payload->GetDictionary() : nullptr;
+  const int64_t id = dict && dict->HasKey("id") ? dict->GetInt("id") : 0;
+  const std::string method = GetStringArg(dict, "method", "");
+  CefRefPtr<CefDictionaryValue> args =
+      dict && dict->HasKey("params") && dict->GetType("params") == VTYPE_DICTIONARY
+          ? dict->GetDictionary("params")
+          : nullptr;
+
+  TibWindow* window = FindWindowByChromeBrowser(browser);
+  const RpcResult result = Dispatch(window, method, args);
+
+  CefRefPtr<CefFrame> frame = browser ? browser->GetMainFrame() : nullptr;
+  if (!frame) return;
+  std::string js;
+  if (result.ok) {
+    js = "window.__tibDeliverReply&&window.__tibDeliverReply(" + std::to_string(id) + ",true," +
+         (result.body.empty() ? std::string("null") : "'" + JsonEscape(result.body) + "'") + ")";
+  } else {
+    js = "window.__tibDeliverReply&&window.__tibDeliverReply(" + std::to_string(id) +
+         ",false,null,'" + JsonEscape(result.error) + "')";
+  }
+  frame->ExecuteJavaScript(js, frame->GetURL(), 0);
 }
 
 }  // namespace tib

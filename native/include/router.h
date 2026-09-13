@@ -21,10 +21,11 @@ double GetDoubleArg(CefRefPtr<CefDictionaryValue> dict, const char* key, double 
 /** 取字典里的布尔参数 */
 bool GetBoolArg(CefRefPtr<CefDictionaryValue> dict, const char* key, bool fallback);
 
-/** 创建 tib 专用的消息路由 */
-CefRefPtr<CefMessageRouterBrowserSide> CreateTibRouter();
-/** 创建查询处理器。注意：Handler 不是引用计数对象，路由接管其所有权，返回裸指针 */
-CefMessageRouterBrowserSide::Handler* CreateTibQueryHandler();
+/** 处理注入脚本发来的宿主调用（浏览器进程 UI 线程调用） */
+void HandleHostCall(CefRefPtr<CefBrowser> browser, const std::string& message);
+
+/** 宿主注入脚本内容（读取输出目录的 ui/tib-host.js） */
+std::string HostBridgeScript();
 
 /** 把外壳 UI 的浏览器对象与窗口绑定，供路由反查窗口 */
 void RegisterWindowForChromeBrowser(CefRefPtr<CefBrowser> browser, TibWindow* window);

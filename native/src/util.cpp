@@ -95,7 +95,11 @@ void Log(const std::string& message) {
   const std::string& dir = AppContext::Get().user_data_dir();
   if (dir.empty()) return;
   std::ofstream out(dir + "\\tibrowser.log", std::ios::app | std::ios::binary);
-  if (out) out << line;
+  if (out) {
+    out << line;
+    // 必须立即 flush：崩溃时未落盘的日志会整块丢失，等于没有日志
+    out.flush();
+  }
 }
 
 }  // namespace tib

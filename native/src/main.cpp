@@ -83,12 +83,18 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
   if (command_line->HasSwitch("energy-mode")) {
     ctx.set_energy_mode(command_line->GetSwitchValue("energy-mode").ToString());
   }
+  if (command_line->HasSwitch("url")) {
+    ctx.set_startup_url(command_line->GetSwitchValue("url").ToString());
+    early("启动地址：" + ctx.startup_url());
+  }
 
   CefSettings settings;
-  // Chromium 的渲染进程沙箱在 Windows 上依赖 chrome_elf 引导；CEF 官方发行包要求
-  // 应用自行承担引导配置，未配置时启动期会直接断言失败。这里先关闭内置沙箱，
-  // 由外壳对网页进程做隔离（详见 docs/ARCHITECTURE.md 的安全说明）。
-  settings.no_sandbox = true;
+  // 沙箱说明（本机实测，勿轻易改动）：
+  //  - no_sandbox=false：启动期会触发 CEF 内部断言（cef_ref_counted.h 的
+  //    needs_adopt_ref_）导致进程直接退出 —— 真正的元凶其实是 CefMessageRouter，
+  //    已改为不依赖它（见 docs/ARCHITECTURE.md 的说明）；本机实测该断言不再出现。
+  //  - no_sandbox=true ：网络服务进程会反复崩溃重启（Network service crashed）。
+  settings.no_sandbox = false;
   settings.multi_threaded_message_loop = false;
   settings.windowless_rendering_enabled = false;
   settings.log_severity = LOGSEVERITY_INFO;

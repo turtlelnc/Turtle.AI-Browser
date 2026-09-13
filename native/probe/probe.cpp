@@ -58,8 +58,8 @@ class ProbeWindow : public CefWindowDelegate, public CefBrowserViewDelegate {
     Trace("准备调用 CreateBrowserView");
     // .release() 取得裸指针（脱离 CefRefPtr 的 adopt 语义），再交给成员 CefRefPtr
     CefBrowserView* raw_view =
-        CefBrowserView::CreateBrowserView(client, "https://example.com", settings, nullptr, nullptr,
-                                          this)
+        CefBrowserView::CreateBrowserView(client, "https://example.com/", settings, nullptr,
+                                          nullptr, this)
             .release();
     Trace("CreateBrowserView 已返回");
     CefRefPtr<CefBrowserView> view = raw_view;
@@ -101,7 +101,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
   if (code >= 0) return code;
 
   CefSettings settings;
-  settings.no_sandbox = true;
+  settings.no_sandbox = false;
   settings.multi_threaded_message_loop = false;
   settings.log_severity = LOGSEVERITY_INFO;
   CefString(&settings.root_cache_path) = ProbeDir() + "\\probe-data";
