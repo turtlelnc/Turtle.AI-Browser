@@ -66,17 +66,29 @@ class UiProbeTask : public CefTask {
     var rootEl = document.getElementById('root');
     var appEl = document.querySelector('.app') || rootEl;
     var box = appEl && appEl.getBoundingClientRect ? appEl.getBoundingClientRect() : { width: 0, height: 0 };
-    var text = (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 100);
-    report('href=' + location.href
-      + ' | ready=' + document.readyState
+    var cs = appEl ? getComputedStyle(appEl) : null;
+    // 可见元素计数：判断"确实画出来了"而不只是 DOM 存在
+    var visible = 0;
+    if (appEl) {
+      var all = appEl.querySelectorAll('*');
+      for (var i = 0; i < all.length; i++) {
+        var r = all[i].getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) visible++;
+      }
+    }
+    var text = (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 120);
+    report('ready=' + document.readyState
       + ' | tib=' + (typeof window.tib)
-      + ' | host=' + (typeof (window.__tibHost && window.__tibHost.call))
       + ' | replyFn=' + (typeof window.__tibDeliverReply)
       + ' | deliverEvent=' + (typeof window.__tibDeliverEvent)
       + ' | rootKids=' + (rootEl ? rootEl.childElementCount : -1)
       + ' | appBox=' + Math.round(box.width) + 'x' + Math.round(box.height)
-      + ' | bodyBg=' + getComputedStyle(document.body).backgroundColor
+      + ' | visibleEls=' + visible
+      + ' | display=' + (cs ? cs.display : 'n/a')
+      + ' | overflowX=' + (document.documentElement.scrollWidth > window.innerWidth ? 'YES' : 'no')
       + ' | skin=' + (document.documentElement.dataset.skin || 'n/a')
+      + ' | theme=' + (document.documentElement.dataset.theme || 'n/a')
+      + ' | tabStrips=' + document.querySelectorAll('[role="tab"],[data-tab-id]').length
       + ' | title=' + document.title
       + ' | text=' + text);
   } catch (e) {

@@ -17,6 +17,24 @@
 namespace {
 
 /**
+ * 当前进程模型（写进日志，不假装是正常隔离模式）。
+ *
+ * 为什么需要它：本机（以及部分 Windows 环境）上 Chromium 的网络服务子进程会启动即崩
+ * （network_service_instance_impl.cc:721 "Network service crashed" 反复刷屏），
+ * 后果是**任何 HTTP 请求都发不出去**，页面永远空白，而导航事件与标题更新一切正常，
+ * 极难排查。`--single-process` 可完全规避，代价是牺牲进程隔离。
+ */
+std::string DetectProcessModel() {
+  CefRefPtr<CefCommandLine> cl = CefCommandLine::GetGlobalCommandLine();
+  if (!cl) return "标准（多进程 + 沙箱）";
+  if (cl->HasSwitch("single-process")) {
+    return "单进程兼容模式（--single-process，用于规避网络服务子进程崩溃，隔离性下降）";
+  }
+  if (cl->HasSwitch("no-sandbox")) return "多进程 + 已关闭沙箱（--no-sandbox）";
+  return "标准（多进程 + 沙箱）";
+}
+
+/**
  * 取用户数据目录。
  *
  * 为什么用 %LOCALAPPDATA% 而不是 %APPDATA%：
@@ -96,6 +114,25 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
   ctx.set_app_dir(tib::ExecutableDir());
   ctx.set_user_data_dir(ResolveUserDataDir());
   ctx.set_incognito(false);
+
+  // ---- 兼容模式决策 ----
+  //
+  // 本机（以及部分 Windows 环境）上 Chromium 的网络服务子进程启动即崩
+  // （network_service_instance_impl.cc:721 "Network service crashed" 反复刷屏），
+  // 后果是**任何 HTTP 请求都发不出去、页面永远空白**，而导航事件与标题更新一切正常。
+  // 实测可用的规避手段只有 --single-process（把渲染/网络都放进浏览器进程），
+  // 代价是牺牲进程隔离。因此：
+  //   * 默认启用单进程兼容模式，保证"能上网"这个最基本的能力；
+  //   * 提供 --multi-process 显式退出，便于在正常环境里恢复完整隔离；
+  //   * 两种模式都会在启动日志里如实标注，不假装是标准隔离模式。
+  {
+    CefRefPtr<CefCommandLine> cl = CefCommandLine::GetGlobalCommandLine();
+    const bool force_multi = cl && cl->HasSwitch("multi-process");
+    if (!force_multi && !(cl && cl->HasSwitch("single-process"))) {
+      ctx.set_compat_single_process(true);
+      early("网络服务子进程在本机不可用，已自动启用单进程兼容模式（可用 --multi-process 关闭）");
+    }
+  }
 
   // 注意：CEF 不会自动处理 Chromium 的 --user-data-dir（那是 Chrome 的约定），
   // 必须自己解析并同时用于 CefSettings。这个开关对排查"旧 profile 损坏"
@@ -180,25 +217,22 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
   {
     CefRefPtr<CefCommandLine> cl = CefCommandLine::GetGlobalCommandLine();
     const bool no_sandbox = cl && cl->HasSwitch("no-sandbox");
-    settings.no_sandbox = no_sandbox;
+    if (no_sandbox) settings.no_sandbox = true;
     if (no_sandbox) early("注意：已按命令行要求关闭沙箱（仅用于排查）");
   }
   settings.multi_threaded_message_loop = false;
   settings.windowless_rendering_enabled = false;
   settings.log_severity = LOGSEVERITY_INFO;
   settings.background_color = 0xFF1C1C1E;
-  // 把 CEF 自身的日志统一落到用户数据目录，便于排查渲染/网络问题
-  CefString(&settings.log_file) = ctx.user_data_dir() + "\\cef.log";
-  settings.log_severity = LOGSEVERITY_VERBOSE;
-  // 让子进程（renderer / gpu / network utility）也把日志写到同一个文件：
-  // 它们的崩溃原因只在它们自己的日志里，主进程日志看不到。
-  settings.log_severity = LOGSEVERITY_INFO;
 
   // 用户数据目录：Chromium profile 全部落在这里
   CefString(&settings.root_cache_path) = ctx.user_data_dir();
   CefString(&settings.cache_path) = ctx.user_data_dir() + "\\cache";
+  // CEF 自身的日志也落到用户数据目录，便于与 tibrowser.log 对照排查
   CefString(&settings.log_file) = ctx.user_data_dir() + "\\cef.log";
   CefString(&settings.user_agent_product) = "TiBrowser/" TIB_VERSION;
+
+  early("进程模型：" + DetectProcessModel());
 
   early("调用 CefInitialize ...");
   if (!CefInitialize(main_args, settings, app.get(), nullptr)) {

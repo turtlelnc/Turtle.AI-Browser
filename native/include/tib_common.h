@@ -98,6 +98,10 @@ class AppContext {
   const std::vector<std::string>& extra_urls() const { return extra_urls_; }
   void AddExtraUrl(const std::string& v) { extra_urls_.push_back(v); }
 
+  /** 兼容模式：单进程运行（网络服务子进程不可用时的规避手段） */
+  bool compat_single_process() const { return compat_single_process_; }
+  void set_compat_single_process(bool v) { compat_single_process_ = v; }
+
   /** 诊断模式：为真时周期性把 UI/页面状态回流到日志（--diag） */
   bool diag() const { return diag_; }
   void set_diag(bool v) { diag_ = v; }
@@ -105,6 +109,7 @@ class AppContext {
  private:
   bool incognito_ = false;
   bool diag_ = false;
+  bool compat_single_process_ = false;
   std::string protection_level_ = "standard";
   std::string energy_mode_ = "standard";
   std::string skin_ = "tibrowser";

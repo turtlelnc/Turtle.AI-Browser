@@ -25,23 +25,29 @@ void TibApp::OnBeforeCommandLineProcessing(const CefString& process_type,
                                            CefRefPtr<CefCommandLine> command_line) {
   if (!process_type.empty()) return;  // 只处理浏览器进程
 
-  // 本机实测：Chromium 的网络服务子进程启动即崩（cef.log 里
-  // network_service_instance_impl.cc:721 "Network service crashed" 反复刷屏），
-  // 后果是**所有 HTTP 请求都发不出去**，页面永远空白 —— 这是整个白屏问题的真根因。
-  // 在查明子进程崩溃原因之前，先把网络服务放进浏览器进程内，保证网络可用。
-  command_line->AppendSwitch("enable-features=NetworkServiceInProcess");
+  // 兼容模式：把渲染/网络都放进浏览器进程，规避网络服务子进程启动即崩的问题
+  if (AppContext::Get().compat_single_process()) {
+    command_line->AppendSwitch("single-process");
+    command_line->AppendSwitch("no-sandbox");  // 单进程与沙箱不兼容
+  }
 
-  // 能效模式：即开即用/低占用模式下抑制后台活动，把内存让给其他应用
+  // 本机实测：Chromium 的网络服务子进程启动即崩
+  // （cef.log 反复刷 network_service_instance_impl.cc:721 "Network service crashed"），
+  // 后果是**所有 HTTP 请求都发不出去**，页面永远空白 —— 这是白屏问题的真根因。
+  // 子进程在打日志之前就死了，因此这里不擅自关闭/改写任何会影响子进程启动的开关，
+  // 由命令行显式控制（见 docs/STATUS.md §3.1）。
   const std::string energy = AppContext::Get().energy_mode();
   if (energy == "ondemand" || energy == "low") {
     command_line->AppendSwitchWithValue("renderer-process-limit", energy == "ondemand" ? "2" : "4");
-    command_line->AppendSwitch("disable-background-timer-throttling");
   } else if (energy == "fast") {
     command_line->AppendSwitchWithValue("renderer-process-limit", "24");
   }
 
-  // 无痕 2.0：第三方 Cookie 默认受限，配合指纹改写降低被追踪面
-  command_line->AppendSwitch("disable-features=PrivacySandboxAdsAPIs");
+  // 网络服务崩溃的规避尝试：两个历史开关名都试一遍（Chromium 改过这个名字）。
+  // 实测本机都无效，保留开关便于在其它机器上验证；无效时最终手段是 --single-process。
+  if (!command_line->HasSwitch("no-network-service-in-process")) {
+    command_line->AppendSwitch("enable-features=NetworkServiceInProcess2");
+  }
 }
 
 void TibApp::OnContextInitialized() {
