@@ -161,18 +161,12 @@ class TibWindow : public CefWindowDelegate, public CefBrowserViewDelegate {
   void OnWindowCreated(CefRefPtr<CefWindow> window) override;
   void OnWindowDestroyed(CefRefPtr<CefWindow> window) override;
   bool CanClose(CefRefPtr<CefWindow> window) override;
-  void OnWindowBoundsChanged(CefRefPtr<CefWindow> window,
-                            const CefRect& new_bounds,
-                            const CefRect& old_bounds) override;
+  void OnWindowBoundsChanged(CefRefPtr<CefWindow> window, const CefRect& new_bounds) override;
+  bool IsFrameless(CefRefPtr<CefWindow> window) override { return true; }
+  bool WithStandardWindowButtons(CefRefPtr<CefWindow> window) override { return false; }
   cef_runtime_style_t GetWindowRuntimeStyle() override { return CEF_RUNTIME_STYLE_ALLOY; }
 
   // CefBrowserViewDelegate
-  bool OnBrowserViewIsLoading(CefRefPtr<CefBrowserView> browser_view,
-                              CefRefPtr<CefBrowser> browser,
-                              CefRefPtr<CefFrame> frame,
-                              int identifier) override {
-    return false;
-  }
   void OnBrowserCreated(CefRefPtr<CefBrowserView> browser_view,
                         CefRefPtr<CefBrowser> browser) override;
 

@@ -136,11 +136,7 @@ std::string TibQueryHandler::Dispatch(TibWindow* window, const std::string& meth
   // ---- 不需要窗口的调用 ----
   if (method == "app.info") {
     return Ok("{\"name\":\"" TIB_PRODUCT_NAME "\",\"version\":\"" TIB_VERSION
-              "\",\"build\":\"" TIB_BUILD "\",\"chromium\":\"" +
-              std::string(CefGetVersion() && CefGetVersion()->GetChromeVersion()
-                              ? CefString(CefGetVersion()->GetChromeVersion()).ToString()
-                              : "unknown") +
-              "\"}");
+              "\",\"build\":\"" TIB_BUILD "\",\"chromium\":\"" CEF_VERSION "\"}");
   }
   if (method == "settings.get") {
     return Ok("{\"protectionLevel\":\"" + ctx.protection_level() + "\",\"energyMode\":\"" +
@@ -267,7 +263,7 @@ CefRefPtr<CefMessageRouterBrowserSide> CreateTibRouter() {
   return CefMessageRouterBrowserSide::Create(config);
 }
 
-CefRefPtr<CefMessageRouterBrowserSide::Handler> CreateTibQueryHandler() {
+CefMessageRouterBrowserSide::Handler* CreateTibQueryHandler() {
   return new TibQueryHandler();
 }
 

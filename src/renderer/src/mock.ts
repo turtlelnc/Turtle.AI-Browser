@@ -31,6 +31,7 @@ import type {
   FingerprintProfile,
   HistoryItem,
   McpServer,
+  NavigateResult,
   OmniboxSuggestion,
   OverlayName,
   ProfileTransferResult,
@@ -183,6 +184,12 @@ export function createMockBridge(): TibBridge {
   const store = seedStore()
   const emitter = new Emitter()
 
+  // 预览环境专用：启动 8 秒后自动弹一次「下载不安全安装包」警告，
+  // 这样人工走查 dist/ui 时也能看到对话框（真实环境由原生侧发 downloadWarning 事件）。
+  if (typeof window !== 'undefined') {
+    setTimeout(() => emitter.emit('downloadWarning', mockDownloadPrompt()), 8000)
+  }
+
   function pushState(patch: Partial<BrowserState> = {}): BrowserState {
     store.state = { ...store.state, ...patch }
     const active = store.state.tabs.find((t) => t.id === store.state.activeTabId)
@@ -211,7 +218,7 @@ export function createMockBridge(): TibBridge {
   }
 
   /** 模拟一次导航（会立刻"加载完成"，并写入历史） */
-  async function navigate(input: string): Promise<{ ok: boolean }> {
+  async function navigate(input: string): Promise<NavigateResult> {
     const url = toUrl(input)
     const tab = store.state.tabs.find((t) => t.id === store.state.activeTabId)
     if (!tab || !url) return { ok: true }
@@ -721,6 +728,15 @@ export function createMockBridge(): TibBridge {
     setSyncToggles: async (patch: Partial<SyncToggles>) => {
       await delay(40)
       store.sync = { ...store.sync, toggles: { ...store.sync.toggles, ...patch } }
+      return clone(store.sync)
+    },
+    setSyncEnabled: async (enabled) => {
+      await delay(40)
+      if (enabled && !store.accounts.some((a) => a.signedIn)) {
+        // 与原生侧约定一致：未登录时不开总开关，由 UI 提示用户先登录
+        return clone(store.sync)
+      }
+      store.sync = { ...store.sync, enabled }
       return clone(store.sync)
     },
     syncNow: async () => {

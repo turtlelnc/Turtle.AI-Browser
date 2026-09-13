@@ -158,6 +158,12 @@ export function scanUrl(
     )
   }
   const h = host.toLowerCase()
+  /**
+   * ⚠️ 关键点：`new URL().hostname` 对非 ASCII 域名会返回 **punycode**（`xn--...`），
+   * 直接对它做同形异义检测**永远不命中**。因此额外从原始 URL 中取出未编码的
+   * authority 段（去掉端口与用户信息），用它来做可信/仿冒判定。
+   */
+  const rawHost = extractRawHost(url)
 
   // 本机 / 内网：豁免裸 IP 规则（不拦截），但仍会继续做同形异义检查
   const internal = isInternalHost(h)
@@ -203,15 +209,15 @@ export function scanUrl(
     )
   }
 
-  // 3) 同形异义（仿冒域名）
-  if (hasHomographRisk(host)) {
+  // 3) 同形异义（仿冒域名）：用未编码的原始主机名判定，punycode 域名也要查
+  if (hasHomographRisk(host) || (rawHost !== host && hasHomographRisk(rawHost))) {
     return verdict(
       {
         blocked: true,
         category: 'phishing',
         reason: '网址包含形似字母的异体字符，可能是仿冒域名',
         rule: 'homograph',
-        evidence: host
+        evidence: rawHost
       },
       host,
       '同形异义仿冒域名'
@@ -301,4 +307,26 @@ function hasHomographRisk(host: string): boolean {
     else if (CONFUSABLE_CHARS.has(ch)) hasConfusable = true
   }
   return hasLatin && hasConfusable
+}
+
+/**
+ * 从原始 URL 中取出**未做 punycode 编码**的主机名。
+ * `new URL('https://аpple.com').hostname` 会得到 `xn--pple-...`，
+ * 而钓鱼检测必须看到原始的 `аpple.com`（西里尔字母 а）。
+ */
+export function extractRawHost(rawUrl: string): string {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(rawUrl.trim())
+  if (!m) return ''
+  let authority = m[1] ?? ''
+  const at = authority.lastIndexOf('@')
+  if (at >= 0) authority = authority.slice(at + 1) // 去掉 user:pass@
+  // 去掉端口（IPv6 形如 [::1]:8080）
+  if (authority.startsWith('[')) {
+    const end = authority.indexOf(']')
+    authority = end >= 0 ? authority.slice(0, end + 1) : authority
+  } else {
+    const colon = authority.lastIndexOf(':')
+    if (colon >= 0) authority = authority.slice(0, colon)
+  }
+  return authority.toLowerCase().replace(/\.$/, '')
 }

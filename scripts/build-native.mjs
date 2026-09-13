@@ -1,7 +1,7 @@
 // 原生外壳的构建编排：解压 CEF、初始化 MSVC 环境、CMake 配置与构建、运行
 // 用法：node scripts/build-native.mjs configure|build|run|all
 import { spawn, spawnSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 const ROOT = resolve(import.meta.dirname, '..')
@@ -30,7 +30,33 @@ function findVcvars() {
   return null
 }
 
-/** 在 cmd /c "vcvars64.bat && <命令>" 下执行，返回退出码 */
+/** Windows SDK 根目录（含 Include / Lib / bin） */
+function winsdkDir() {
+  for (const root of [process.env['ProgramFiles(x86)'], 'C:\\Program Files (x86)']) {
+    if (!root) continue
+    const kits = join(root, 'Windows Kits', '10')
+    if (existsSync(join(kits, 'Include'))) return kits
+  }
+  return ''
+}
+
+/** 取已安装的最新 SDK 版本号（如 10.0.26100.0） */
+function pickSdkVersion() {
+  const kits = winsdkDir()
+  if (!kits) return ''
+  const versions = readdirSync(join(kits, 'Include')).filter((v) => /^10\./.test(v))
+  versions.sort((a, b) =>
+    a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' })
+  )
+  return versions.at(-1) ?? ''
+}
+
+const sdkVersion = pickSdkVersion()
+
+/** 在 vcvars64.bat 环境下执行命令。
+ *  通过临时 .bat 文件调用（多层引号经 cmd /c 传递极易出错），并且 **只写纯 ASCII 内容**：
+ *  本机用户名含中文（吴桥生），cmd 读取批处理文件用系统 ANSI 代码页，
+ *  含中文的 .bat 会被解成乱码路径。路径一律通过环境变量传入（环境块是 UTF-16，不经过代码页转换）。 */
 function runInMsvcEnv(command, { cwd = ROOT, stdio = 'inherit' } = {}) {
   const vcvars = findVcvars()
   if (!vcvars) {
@@ -38,8 +64,39 @@ function runInMsvcEnv(command, { cwd = ROOT, stdio = 'inherit' } = {}) {
     process.exit(1)
   }
   const cmdExe = join(process.env.SystemRoot ?? 'C:\\WINDOWS', 'System32', 'cmd.exe')
-  const line = `call "${vcvars}" >nul && ${command}`
-  const res = spawnSync(cmdExe, ['/d', '/s', '/c', line], { cwd, stdio, shell: false })
+  const batPath = join(CACHE, 'tib-build.cmd')
+  const bat = [
+    '@echo off',
+    'call "%TIB_VCVARS%" >nul',
+    // 本机 vcvars64.bat 未能识别 Windows SDK（WindowsSdkDir 为空、PATH 里没有 rc.exe），
+    // 这里显式补齐 SDK 的 bin 目录，否则链接阶段会因找不到 rc.exe 而失败。
+    'if "%WindowsSdkDir%"=="" set "WindowsSdkDir=%TIB_WINSDK%"',
+    'set "PATH=%TIB_WINSDK%\\bin\\%TIB_SDKVER%\\x64;%TIB_WINSDK%\\bin\\x64;%PATH%"',
+    `if "%WindowsSDKVersion%"=="" set "WindowsSDKVersion=${sdkVersion}\\"`,
+    // 同理补齐 SDK 的库目录与头文件目录（否则链接器报 LNK1104: 无法打开 kernel32.lib）
+    'set "LIB=%TIB_WINSDK%\\Lib\\%TIB_SDKVER%\\ucrt\\x64;%TIB_WINSDK%\\Lib\\%TIB_SDKVER%\\um\\x64;%LIB%"',
+    'set "INCLUDE=%TIB_WINSDK%\\Include\\%TIB_SDKVER%\\ucrt;%TIB_WINSDK%\\Include\\%TIB_SDKVER%\\um;%TIB_WINSDK%\\Include\\%TIB_SDKVER%\\shared;%INCLUDE%"',
+    command,
+    'exit /b %ERRORLEVEL%',
+    ''
+  ].join('\r\n')
+  writeFileSync(batPath, bat, 'ascii')
+
+  const res = spawnSync(cmdExe, ['/d', '/c', batPath], {
+    cwd,
+    stdio,
+    shell: false,
+    env: {
+      ...process.env,
+      TIB_VCVARS: vcvars,
+      TIB_ROOT: ROOT,
+      TIB_NATIVE: join(ROOT, 'native'),
+      TIB_BUILD: BUILD,
+      TIB_CEF_ROOT: CEF_DEST,
+      TIB_WINSDK: winsdkDir(),
+      TIB_SDKVER: sdkVersion
+    }
+  })
   return res.status ?? 1
 }
 
@@ -90,14 +147,14 @@ function configure() {
   ensureCefExtracted()
   mkdirSync(BUILD, { recursive: true })
   const code = runInMsvcEnv(
-    `cmake -S "${join(ROOT, 'native')}" -B "${BUILD}" -G Ninja -DCMAKE_BUILD_TYPE=Release -DTIB_CEF_ROOT="${CEF_DEST}"`
+    'cmake -S "%TIB_NATIVE%" -B "%TIB_BUILD%" -G Ninja -DCMAKE_BUILD_TYPE=Release -DTIB_CEF_ROOT="%TIB_CEF_ROOT%"'
   )
   if (code !== 0) process.exit(code)
 }
 
 function build() {
   if (!existsSync(join(BUILD, 'CMakeCache.txt'))) configure()
-  const code = runInMsvcEnv(`cmake --build "${BUILD}" --parallel`)
+  const code = runInMsvcEnv('cmake --build "%TIB_BUILD%" --parallel')
   if (code !== 0) process.exit(code)
 }
 

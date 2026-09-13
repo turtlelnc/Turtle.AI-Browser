@@ -1,14 +1,37 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-skin="tibrowser" data-theme="light" data-perf="high">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- UI 渲染进程仅加载本地内容，真正的网页内容运行在沙箱化的 WebContentsView 中 -->
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; font-src 'self' data:; connect-src 'self' ws: http: https:"
-    />
-    <title>TIbrowser</title>
+    <!--
+      TiBrowser 外壳 UI（React）。
+      资源使用相对路径（vite base './'），因此既能由原生 CEF 以 tib://ui/ 提供，
+      也能被直接双击打开（dist/ui/index.html）做纯 UI 走查——此时没有 window.tib，
+      会自动降级为开发用 mock 桥（见 src/bridge.ts）。
+      本页面不引用任何 Electron API。
+    -->
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="TiBrowser 浏览器外壳界面" />
+    <title>TiBrowser</title>
+    <script>
+      // 首屏前先落一次外观属性，避免「先按默认皮肤画一帧再跳」的闪烁。
+      // 这里读的是原生宿主写入的引导数据；浏览器预览时不存在，走默认值即可。
+      ;(function () {
+        try {
+          var boot = window.__TIB_BOOT__ || {}
+          var root = document.documentElement
+          if (boot.skin) root.dataset.skin = boot.skin
+          if (boot.perf) root.dataset.perf = boot.perf
+          var theme = boot.theme || 'system'
+          if (theme === 'system') {
+            theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+          }
+          root.dataset.theme = theme
+        } catch (e) {
+          /* 引导失败不阻塞渲染，稍后由 React 侧重新应用 */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

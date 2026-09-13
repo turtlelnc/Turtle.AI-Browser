@@ -79,13 +79,15 @@ export const MOCK_STATE: BrowserState = {
       id: 'tab-3',
       url: 'https://github.com/turtlelnc',
       input: 'https://github.com/turtlelnc',
-      title: 'turtlelnc · GitHub',
+      title: 'turtlelnc · GitHub（无痕示例）',
       favicon: '',
       isLoading: true,
       canGoBack: true,
       canGoForward: false,
       isSecure: true,
       isNewTab: false,
+      // 第三个标签演示「无痕窗口」在标签栏上的可见标记（feature 4）
+      incognito: true,
       zoomLevel: 0
     }
   ],

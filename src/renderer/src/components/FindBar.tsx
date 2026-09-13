@@ -1,5 +1,10 @@
+/**
+ * 页内查找栏（Ctrl+F）。
+ * 展开 / 收起会改变内容区布局，因此必须通知原生侧（`tib.setFindOpen`）。
+ */
 import { useEffect, useRef, useState } from 'react'
-import type { FindResult } from '@shared/api'
+import type { FindResult } from '@shared/bridge'
+import { on, tib } from '../bridge'
 import { Close } from './icons'
 
 export function FindBar({ onClose }: { onClose: () => void }): JSX.Element {
@@ -9,17 +14,17 @@ export function FindBar({ onClose }: { onClose: () => void }): JSX.Element {
 
   useEffect(() => {
     inputRef.current?.focus()
-    window.tibrowser.find.setOpen(true)
-    const off = window.tibrowser.find.onResult(setResult)
+    void tib.setFindOpen(true)
+    const off = on('findResult', setResult)
     return () => {
       off()
-      window.tibrowser.find.stop()
-      window.tibrowser.find.setOpen(false)
+      void tib.findStop()
+      void tib.setFindOpen(false)
     }
   }, [])
 
   useEffect(() => {
-    window.tibrowser.find.inPage(text)
+    void tib.findInPage(text)
   }, [text])
 
   return (
@@ -28,14 +33,15 @@ export function FindBar({ onClose }: { onClose: () => void }): JSX.Element {
         ref={inputRef}
         value={text}
         placeholder="在页面中查找"
+        aria-label="在页面中查找"
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') window.tibrowser.find.inPage(text)
+          if (e.key === 'Enter') void tib.findInPage(text)
           if (e.key === 'Escape') onClose()
         }}
       />
       <span className="count">{text ? `${result.activeMatchOrdinal}/${result.matches}` : ''}</span>
-      <span className="nav-btn" style={{ width: 26, height: 26 }} onClick={onClose}>
+      <span className="nav-btn" style={{ width: 26, height: 26 }} title="关闭（Esc）" onClick={onClose}>
         <Close size={15} />
       </span>
     </div>

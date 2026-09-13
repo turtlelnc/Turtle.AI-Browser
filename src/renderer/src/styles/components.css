@@ -87,13 +87,13 @@
   line-height: 1.6;
 }
 .settings-foot {
-  position: sticky;
-  bottom: 0;
   display: flex;
   align-items: center;
   gap: var(--tb-space-3);
-  padding: var(--tb-space-3) 0;
-  background: linear-gradient(to top, var(--tb-bg-elevated) 40%, transparent);
+  flex-wrap: wrap;
+  padding: var(--tb-space-4) 0 var(--tb-space-2);
+  margin-top: var(--tb-space-2);
+  border-top: 1px solid var(--tb-line);
   font-size: var(--tb-font-size-sm);
 }
 .settings-foot .save-state {
@@ -162,7 +162,9 @@
 .opt-card.selected {
   border-color: var(--tb-accent);
   background: var(--tb-surface);
-  box-shadow: var(--tb-focus-ring), var(--tb-elev-2);
+  /* 用「强调色 + 半透明」自绘光圈，而不是复用 focus-ring 令牌：
+     否则皮肤换色时会出现「蓝色选中卡片配青色光圈」的串色 */
+  box-shadow: 0 0 0 3px var(--tb-accent-soft), var(--tb-elev-2);
 }
 .opt-card input[type='radio'] {
   position: absolute;

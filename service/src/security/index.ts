@@ -70,14 +70,18 @@ export { reviewExtension, type ExtensionReview, type ExtensionRiskLevel } from '
 
 import { existsSync } from 'node:fs'
 import { loadRuntimeBlocklists } from './blocklist.js'
+import { resolveBlocklistDir } from '../paths.js'
 
 /**
  * 初始化安全模块：合并运行时黑名单。
- * @param blocklistDir `resources/blocklists` 目录；不存在时静默跳过（内置样例列表仍然生效）
+ * @param blocklistDir `resources/blocklists` 目录；为空时依次尝试环境变量
+ *        `TIB_BLOCKLIST_DIR` 与 `<工作目录>/resources/blocklists`，都不存在则静默跳过
+ *        （内置样例列表仍然生效）。
  */
-export function initSecurity(blocklistDir: string): ReturnType<typeof loadRuntimeBlocklists> {
-  if (!blocklistDir || !existsSync(blocklistDir)) {
-    return { dir: blocklistDir ?? '', files: 0, domains: 0 }
+export function initSecurity(blocklistDir?: string): ReturnType<typeof loadRuntimeBlocklists> {
+  const dir = resolveBlocklistDir(blocklistDir)
+  if (!dir || !existsSync(dir)) {
+    return { dir: dir || '(未找到黑名单目录)', files: 0, domains: 0 }
   }
-  return loadRuntimeBlocklists(blocklistDir)
+  return loadRuntimeBlocklists(dir)
 }

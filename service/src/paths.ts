@@ -11,7 +11,8 @@
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /** 产品名即用户数据目录名，与 native 侧保持一致 */
 export const USER_DATA_DIR_NAME = 'TiBrowser'
@@ -82,4 +83,27 @@ export function dirExists(p: string): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * 运行时黑名单目录解析。
+ * 顺序：显式参数 → 环境变量 `TIB_BLOCKLIST_DIR` → 从工作目录与模块目录**逐级向上**查找
+ * `resources/blocklists`（这样无论从仓库根还是从 `service/` 启动都能找到）。
+ */
+export function resolveBlocklistDir(explicit?: string): string {
+  const direct = explicit?.trim() || process.env['TIB_BLOCKLIST_DIR']?.trim() || ''
+  if (direct) return existsSync(direct) ? direct : ''
+
+  const starts = [process.cwd(), dirname(fileURLToPath(import.meta.url))]
+  for (const start of starts) {
+    let dir = start
+    for (let i = 0; i < 4; i++) {
+      const candidate = join(dir, 'resources', 'blocklists')
+      if (existsSync(candidate)) return candidate
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+  }
+  return ''
 }

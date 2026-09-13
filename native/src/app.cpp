@@ -1,6 +1,7 @@
 // TiBrowser 应用级对象实现
 #include "app.h"
 
+#include "scheme.h"
 #include "window.h"
 
 namespace tib {
@@ -37,10 +38,11 @@ void TibApp::OnBeforeCommandLineProcessing(const CefString& process_type,
 
 void TibApp::OnContextInitialized() {
   CEF_REQUIRE_UI_THREAD();
+  Log("OnContextInitialized: 开始注册 tib:// 协议");
   RegisterTibSchemeHandlers();
+  Log("OnContextInitialized: 协议注册完成，创建主窗口");
   CreateMainWindow(false);
-  Log(std::string("CEF 上下文初始化完成，Chromium 版本 ") +
-      CefString(CefGetVersion() ? CefGetVersion()->GetChromeVersion() : "").ToString());
+  Log(std::string("CEF 上下文初始化完成，内核版本 ") + CEF_VERSION);
 }
 
 }  // namespace tib

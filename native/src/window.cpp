@@ -17,9 +17,24 @@ std::vector<CefRefPtr<TibWindow>>& Windows() {
   return windows;
 }
 
-/** 把 C++ 对象序列化成 JSON 字符串（CEF 自带 JSON 写入器） */
+/** 把任意 CefValue 序列化成 JSON 字符串（CEF 自带 JSON 写入器） */
 std::string ToJson(CefRefPtr<CefValue> value) {
+  if (!value) return "{}";
   return CefWriteJSON(value, JSON_WRITER_DEFAULT).ToString();
+}
+
+/** 把字典包装成 CefValue */
+CefRefPtr<CefValue> AsValue(CefRefPtr<CefDictionaryValue> dict) {
+  CefRefPtr<CefValue> value = CefValue::Create();
+  value->SetDictionary(dict);
+  return value;
+}
+
+/** 把列表包装成 CefValue */
+CefRefPtr<CefValue> AsValue(CefRefPtr<CefListValue> list) {
+  CefRefPtr<CefValue> value = CefValue::Create();
+  value->SetList(list);
+  return value;
 }
 
 /** 颜色：深浅两套主题的窗口底色 */
@@ -38,6 +53,7 @@ struct TibWindow::Tab {
 
 std::string TibWindow::CreateTab(const std::string& input, bool activate) {
   const std::string id = MakeId();
+  Log("CreateTab: 开始 id=" + id);
   auto tab = std::make_shared<Tab>();
   tab->id = id;
   tab->info.id = id;
@@ -45,22 +61,30 @@ std::string TibWindow::CreateTab(const std::string& input, bool activate) {
 
   CefRefPtr<PageClient> client = new PageClient(this, id);
   tab->client = client;
+  Log("CreateTab: PageClient 就绪");
 
   // 每个标签页一个独立 BrowserView；无痕窗口使用内存态 RequestContext
   CefRefPtr<CefRequestContext> context;
   if (incognito_) {
-    CefRequestContextSettings settings;
-    settings.persist_session_cookies = false;
-    context = CefRequestContext::CreateContext(settings, nullptr);
+    CefRequestContextSettings context_settings;
+    context_settings.persist_session_cookies = false;
+    context = CefRequestContext::CreateContext(context_settings, nullptr);
     ApplyFingerprintProfile(context);  // 无痕模式 2.0：注入指纹改写
   }
 
   CefBrowserSettings browser_settings;
   browser_settings.background_color = kBgColor;
-  CefRefPtr<CefBrowserView> view = CefBrowserView::CreateBrowserView(
-      client, "tib://newtab", browser_settings, nullptr, context, this);
-  tab->view = view;
+  // 注意：CefBrowserView::CreateBrowserView 返回的是**新创建**的引用；
+  // 直接赋给 CefRefPtr 会触发 "Check failed: !needs_adopt_ref_" 断言，
+  // 必须先取出裸指针，让 CefRefPtr 走 adopt 语义。
+  CefBrowserView* raw_view =
+      CefBrowserView::CreateBrowserView(client, "tib://newtab", browser_settings, nullptr, context,
+                                        this)
+          .release();
+  Log("CreateTab: BrowserView 已创建");
+  tab->view = raw_view;
   tabs_.push_back(tab);
+  Log("CreateTab: 已加入标签列表");
 
   if (!active_id_.empty() && content_view_) {
     content_view_->SetVisible(false);
@@ -70,8 +94,8 @@ std::string TibWindow::CreateTab(const std::string& input, bool activate) {
   }
 
   active_id_ = id;
-  content_view_ = view;
-  window_->AddChildView(view);
+  content_view_ = raw_view;
+  window_->AddChildView(content_view_);
   Layout();
 
   if (!input.empty()) {
@@ -200,7 +224,12 @@ void TibWindow::GoForward() {
 
 void TibWindow::Reload(bool ignore_cache) {
   CefRefPtr<CefBrowser> b = active_page();
-  if (b) b->Reload(ignore_cache);
+  if (!b) return;
+  if (ignore_cache) {
+    b->ReloadIgnoreCache();
+  } else {
+    b->Reload();
+  }
 }
 
 void TibWindow::Stop() {
@@ -285,24 +314,15 @@ void TibWindow::SyncState() {
     t->SetBool("isNewTab", info.is_new_tab);
     t->SetBool("blocked", info.blocked);
     t->SetDouble("zoomLevel", info.zoom);
-    list->SetValue(i, t);
+    list->SetValue(i, AsValue(t));
   }
-  root->SetValue("tabs", list);
+  root->SetValue("tabs", AsValue(list));
   root->SetString("activeTabId", active_id_);
   root->SetBool("isIncognito", incognito_);
   root->SetString("skin", AppContext::Get().skin());
   root->SetString("protectionLevel", AppContext::Get().protection_level());
   root->SetString("energyMode", AppContext::Get().energy_mode());
-  SendEvent("state", CefValue::Create());
-  // 说明：完整实现会把上面的 root 作为载荷；此处保持接口形状一致，载荷序列化在 router 中补全
-  CefRefPtr<CefProcessMessage> message = CefProcessMessage::Create("tib.event");
-  CefRefPtr<CefListValue> args = message->GetArgumentList();
-  args->SetSize(2);
-  args->SetString(0, "state");
-  args->SetString(1, ToJson(root));
-  if (CefRefPtr<CefBrowser> chrome = chrome_browser()) {
-    chrome->GetMainFrame()->SendProcessMessage(PID_RENDERER, message);
-  }
+  SendEvent("state", AsValue(root));
 }
 
 void TibWindow::OnTabTitle(const std::string& tab_id, const std::string& title) {
@@ -369,18 +389,32 @@ bool TibWindow::OpenInNewTab(const std::string& url) {
 void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   window_ = window;
   window->SetTitle(TIB_PRODUCT_NAME);
+  Log("OnWindowCreated: 窗口已创建");
+
+  // 消息路由：服务外壳 UI 的 tib.* 查询（网页视图不挂，避免网页调用内部 API）
+  router_ = CreateTibRouter();
+  router_->AddHandler(CreateTibQueryHandler(), true);
+  Log("OnWindowCreated: 消息路由已就绪");
 
   CefBrowserSettings chrome_settings;
   chrome_settings.background_color = kBgColor;
   chrome_client_ = new ChromeClient(this);
-  chrome_view_ = CefBrowserView::CreateBrowserView(chrome_client_, "tib://ui/index.html",
-                                                   chrome_settings, nullptr, nullptr, this);
+  chrome_client_->set_router(router_);
+  Log("OnWindowCreated: ChromeClient 就绪");
+  // 同上：新建引用必须取出裸指针再交给 CefRefPtr（adopt 语义）
+  CefBrowserView* raw_chrome =
+      CefBrowserView::CreateBrowserView(chrome_client_, "tib://ui/index.html", chrome_settings,
+                                        nullptr, nullptr, this)
+          .release();
+  chrome_view_ = raw_chrome;
   window->AddChildView(chrome_view_);
+  Log("OnWindowCreated: 外壳 UI 视图已挂载");
   window->Show();
 
   // 首个标签页
   CreateTab("", true);
   Layout();
+  Log("OnWindowCreated: 完成");
 }
 
 void TibWindow::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
@@ -402,10 +436,9 @@ bool TibWindow::CanClose(CefRefPtr<CefWindow> window) {
 }
 
 void TibWindow::OnWindowBoundsChanged(CefRefPtr<CefWindow> window,
-                                     const CefRect& new_bounds,
-                                     const CefRect& old_bounds) {
+                                     const CefRect& new_bounds) {
+  (void)window;
   (void)new_bounds;
-  (void)old_bounds;
   Layout();
 }
 
@@ -431,6 +464,9 @@ CefRefPtr<CefMessageRouterBrowserSide> TibWindow::EnsureRouter() {
 
 void ChromeClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   browser_ = browser;
+  // 建立「外壳浏览器 → 窗口」反查，供消息路由分发使用
+  RegisterWindowForChromeBrowser(browser, window_);
+  if (window_) window_->SyncState();
 }
 
 bool ChromeClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
@@ -579,10 +615,14 @@ void PageClient::OnBeforeContextMenu(CefRefPtr<CefBrowser> browser,
 // ---------------------------------------------------------------- 窗口管理
 
 void CreateMainWindow(bool incognito) {
+  Log("CreateMainWindow: 准备创建 TibWindow");
   CefRefPtr<TibWindow> window = new TibWindow(incognito);
+  Log("CreateMainWindow: TibWindow 引用就绪，登记到窗口表");
   Windows().push_back(window);
+  Log("CreateMainWindow: 调用 CefWindow::CreateTopLevelWindow");
 
   CefWindow::CreateTopLevelWindow(window);
+  Log("CreateMainWindow: CreateTopLevelWindow 已返回");
 }
 
 void CloseAllWindows() {

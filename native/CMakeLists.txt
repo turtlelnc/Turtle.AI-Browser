@@ -16,7 +16,8 @@ endif()
 if(MSVC)
   add_compile_options(/utf-8 /MP /W3 /wd4100 /wd4996)
   add_definitions(-DUNICODE -D_UNICODE -DNOMINMAX -DWIN32_LEAN_AND_MEAN)
-  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+  # CEF 发行包的 libcef_dll_wrapper 是用 /MT（静态 CRT）编译的，必须一致，否则 LNK2038
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
   add_link_options(/DEBUG:FASTLINK)
 endif()
 
@@ -44,7 +45,8 @@ set(CEF_ROOT "${TIB_CEF_ROOT}" CACHE PATH "" FORCE)
 list(APPEND CMAKE_MODULE_PATH "${TIB_CEF_ROOT}/cmake")
 find_package(CEF REQUIRED)
 
-add_subdirectory("${TIB_CEF_ROOT}/libcef_dll")
+# CEF 的 wrapper 目标在源码树之外，必须显式给出二进制目录
+add_subdirectory("${TIB_CEF_ROOT}/libcef_dll" "${CMAKE_CURRENT_BINARY_DIR}/libcef_dll")
 
 # 产品版本号：供「关于」页与窗口标题使用
 set(TIB_VERSION "1.0.0-rc1")
@@ -58,22 +60,52 @@ add_executable(TiBrowser WIN32
   src/main.cpp
   src/app.cpp
   src/window.cpp
-  src/chrome.cpp
   src/scheme.cpp
   src/router.cpp
   src/security.cpp
   src/service_client.cpp
   src/util.cpp
+  resources/tibrowser.rc   # 图标（来自根目录 ico.png）与版本信息
 )
 
+# 资源编译器需要能找到 icon.ico：把 build/ 作为资源搜索目录
+set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} /I \"${CMAKE_CURRENT_SOURCE_DIR}/../build\"")
+target_include_directories(TiBrowser PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../build")
+
 target_include_directories(TiBrowser PRIVATE
+  "${TIB_CEF_ROOT}"  # 让 #include "include/cef_*.h" 生效（CEF 官方示例的写法）
   "${CMAKE_CURRENT_SOURCE_DIR}/include"
   "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
-target_link_libraries(TiBrowser PRIVATE libcef_lib libcef_dll_wrapper)
+# 链接：libcef_dll_wrapper（CEF 的 C++ 包装层）+ libcef.lib（Chromium 内核导入库）
+if(WIN32)
+  target_link_libraries(TiBrowser PRIVATE libcef_dll_wrapper "${CEF_LIB_RELEASE}")
+  # 延迟加载：允许在没有 libcef.dll 的机器上给出可读错误而不是直接无法启动
+  target_link_options(TiBrowser PRIVATE "/DELAYLOAD:libcef.dll")
+  target_link_libraries(TiBrowser PRIVATE delayimp)
+else()
+  target_link_libraries(TiBrowser PRIVATE libcef_dll_wrapper "${CEF_LIB_RELEASE}")
+endif()
 
-# CEF 运行时文件（dll / pak / locales / swiftshader 等）复制到输出目录
-COPY_FILES(TiBrowser "${TIB_CEF_ROOT}")
+# CEF 运行时文件（libcef.dll / pak / locales / swiftshader 等）复制到输出目录
+# Windows 下发行包的运行库在 Release/，资源在 Resources/
+COPY_FILES(TiBrowser "${CEF_BINARY_FILES}" "${TIB_CEF_ROOT}/Release"
+  "$<TARGET_FILE_DIR:TiBrowser>")
+COPY_FILES(TiBrowser "${CEF_RESOURCE_FILES}" "${TIB_CEF_ROOT}/Resources"
+  "$<TARGET_FILE_DIR:TiBrowser>")
+
+# 启动诊断探针：最小 CEF 程序，用于把「内核能否起来」与「外壳代码」分离定位
+add_executable(TiBrowserProbe WIN32 probe/probe.cpp)
+target_include_directories(TiBrowserProbe PRIVATE "${TIB_CEF_ROOT}")
+target_link_libraries(TiBrowserProbe PRIVATE libcef_dll_wrapper "${CEF_LIB_RELEASE}")
+if(WIN32)
+  target_link_options(TiBrowserProbe PRIVATE "/DELAYLOAD:libcef.dll")
+  target_link_libraries(TiBrowserProbe PRIVATE delayimp)
+endif()
+COPY_FILES(TiBrowserProbe "${CEF_BINARY_FILES}" "${TIB_CEF_ROOT}/Release"
+  "$<TARGET_FILE_DIR:TiBrowserProbe>")
+COPY_FILES(TiBrowserProbe "${CEF_RESOURCE_FILES}" "${TIB_CEF_ROOT}/Resources"
+  "$<TARGET_FILE_DIR:TiBrowserProbe>")
 
 # UI 与内置页面资源：把 Vite 产物 dist/ui 复制到输出目录 ui/
 set(TIB_UI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../dist/ui")

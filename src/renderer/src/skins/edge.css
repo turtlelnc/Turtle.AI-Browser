@@ -50,6 +50,15 @@
   --tb-tab-close-on-active: 1;
 }
 
+/* 深色主题下提亮强调色：浅色模式的 #0f6cbd 在深底上对比度不足 */
+:root[data-skin='edge'][data-theme='dark'] {
+  --tb-accent: #4a9eea;
+  --tb-accent-hover: #6bb2f0;
+  --tb-accent-soft: rgba(74, 158, 234, 0.18);
+  --tb-accent-ai: #9b83ff;
+  --tb-selected: rgba(74, 158, 234, 0.16);
+}
+
 /* Edge 风格：激活标签为实心卡片，非激活标签仅悬停时着色 */
 :root[data-skin='edge'] .tab.active {
   background: var(--tb-tab-active);

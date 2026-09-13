@@ -7,7 +7,7 @@ export { history, MAX_HISTORY_ENTRIES } from './history.js'
 export { downloads, MAX_DOWNLOAD_ENTRIES } from './downloads.js'
 export { store, API_KEY_MASK } from './store.js'
 export { secrets } from './secrets.js'
-export { readJson, tryReadJson, writeJsonAtomic, JsonCollection } from './json-store.js'
+export { readJson, tryReadJson, writeJsonAtomic, writeTextAtomic, JsonCollection } from './json-store.js'
 
 import { bookmarks } from './bookmarks.js'
 import { history } from './history.js'

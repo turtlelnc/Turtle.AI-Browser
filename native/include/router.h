@@ -23,8 +23,8 @@ bool GetBoolArg(CefRefPtr<CefDictionaryValue> dict, const char* key, bool fallba
 
 /** 创建 tib 专用的消息路由 */
 CefRefPtr<CefMessageRouterBrowserSide> CreateTibRouter();
-/** 创建查询处理器（生命周期与路由绑定） */
-CefRefPtr<CefMessageRouterBrowserSide::Handler> CreateTibQueryHandler();
+/** 创建查询处理器。注意：Handler 不是引用计数对象，路由接管其所有权，返回裸指针 */
+CefMessageRouterBrowserSide::Handler* CreateTibQueryHandler();
 
 /** 把外壳 UI 的浏览器对象与窗口绑定，供路由反查窗口 */
 void RegisterWindowForChromeBrowser(CefRefPtr<CefBrowser> browser, TibWindow* window);

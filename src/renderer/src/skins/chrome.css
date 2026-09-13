@@ -54,6 +54,15 @@
   --tb-chrome-blur: none;
 }
 
+/* 深色主题下提亮强调色：浅色模式的 #1b6ef3 在深底上对比度不足 */
+:root[data-skin='chrome'][data-theme='dark'] {
+  --tb-accent: #5b9bff;
+  --tb-accent-hover: #7cb0ff;
+  --tb-accent-soft: rgba(91, 155, 255, 0.18);
+  --tb-accent-ai: #a08bff;
+  --tb-selected: rgba(91, 155, 255, 0.16);
+}
+
 /* 梯形感：激活标签上圆角大、下圆角小，并且向下「接」住工具栏 */
 :root[data-skin='chrome'] .tab {
   border-radius: var(--tb-tab-radius-active) var(--tb-tab-radius-active) 4px 4px;

@@ -12,6 +12,9 @@ class TibApp : public CefApp, public CefBrowserProcessHandler {
 
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
 
+  /** CefBrowserProcessHandler：CEF 初始化完成后注册协议并开首个窗口 */
+  void OnContextInitialized() override;
+
   void OnBeforeCommandLineProcessing(const CefString& process_type,
                                      CefRefPtr<CefCommandLine> command_line) override;
 

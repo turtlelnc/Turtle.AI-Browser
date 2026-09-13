@@ -268,6 +268,11 @@ export class SecretStore {
   status(): SecretBackendStatus {
     return currentSecretBackend()
   }
+
+  /** 强制重新探测加密后端（启动时调用，得到真实结论） */
+  async probe(): Promise<SecretBackendStatus> {
+    return resolveSecretBackend(true)
+  }
 }
 
 /** 全局单例（路径在首次访问时解析，便于自检切换临时 userData） */

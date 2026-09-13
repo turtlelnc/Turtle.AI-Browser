@@ -41,9 +41,17 @@ export function tryReadJson<T>(filePath: string, fallback: T): { value: T; ok: b
 
 /** 原子写入 JSON 文件（自动创建父目录）。写入失败抛出中文错误。 */
 export function writeJsonAtomic(filePath: string, data: unknown): void {
+  writeTextAtomic(filePath, JSON.stringify(data, null, 2))
+}
+
+/**
+ * 原子写入**纯文本**文件（临时文件 + fsync + rename）。
+ * 用于文档生成、工作区源码写入等场景——绝不能走 JSON 序列化，
+ * 否则文本会被引号包裹并转义（曾导致生成的 Markdown 变成一行 JSON 字符串）。
+ */
+export function writeTextAtomic(filePath: string, text: string): void {
   const dir = dirname(filePath)
   mkdirSync(dir, { recursive: true })
-  const text = JSON.stringify(data, null, 2)
   const tmp = `${filePath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
   let fd: number | null = null
   try {

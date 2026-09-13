@@ -1,0 +1,34 @@
+// TiBrowser 原生外壳的 Windows 资源：图标与版本信息
+// 图标来源：仓库根目录 ico.png（用户提供的产品图），由 scripts/make-icon.mjs 生成多尺寸 ICO
+#include <windows.h>
+
+IDI_TIBROWSER ICON "icon.ico"
+
+VS_VERSION_INFO VERSIONINFO
+  FILEVERSION     1,0,0,260913
+  PRODUCTVERSION  1,0,0,260913
+  FILEFLAGSMASK   0x3fL
+  FILEFLAGS       0x0L
+  FILEOS          VOS_NT_WINDOWS32
+  FILETYPE        VFT_APP
+  FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "080404b0"  /* 简体中文, Unicode */
+    BEGIN
+      VALUE "CompanyName",      "TiBrowser"
+      VALUE "FileDescription",  "TiBrowser —— 基于 Chromium 内核的 AI 安全浏览器"
+      VALUE "FileVersion",      "1.0.0-rc1 (build 260913)"
+      VALUE "InternalName",     "TiBrowser"
+      VALUE "LegalCopyright",   "Copyright (C) 2026 TiBrowser. GPL-3.0-only"
+      VALUE "OriginalFilename", "TiBrowser.exe"
+      VALUE "ProductName",      "TiBrowser"
+      VALUE "ProductVersion",   "1.0.0-rc1 (build 260913)"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x804, 1200
+  END
+END

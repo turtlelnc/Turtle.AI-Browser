@@ -64,6 +64,8 @@ export default defineConfig({
     target: 'chrome120',
     sourcemap: true,
     chunkSizeWarningLimit: 1024,
+    // 产物是给 CEF 的 tib://ui/index.html 用的，构建日志里显示绝对路径会很吵
+    assetsDir: 'assets',
     rollupOptions: {
       input: resolve(rendererRoot, 'index.html'),
       output: {

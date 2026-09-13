@@ -6,9 +6,11 @@
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
 #include "include/cef_command_line.h"
+#include "include/cef_parser.h"
 #include "include/cef_resource_handler.h"
 #include "include/cef_scheme.h"
 #include "include/cef_values.h"
+#include "include/cef_version.h"
 #include "include/views/cef_browser_view.h"
 #include "include/views/cef_browser_view_delegate.h"
 #include "include/views/cef_box_layout.h"
@@ -17,6 +19,8 @@
 #include "include/wrapper/cef_helpers.h"
 #include "include/wrapper/cef_message_router.h"
 #include "include/wrapper/cef_stream_resource_handler.h"
+
+#include "version.h"  // 由 CMake 从 version.h.in 生成
 
 #include <string>
 #include <vector>

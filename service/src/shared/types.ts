@@ -255,4 +255,6 @@ export interface ServiceSettings extends Settings {
   workspace: WorkspaceConfig
   /** 可选的自建 URL 信誉查询端点（增强型防护使用，留空表示未配置） */
   reputationEndpoint: string
+  /** 同步目录（本地/网盘文件夹后端使用；留空表示未配置同步） */
+  syncFolder?: string
 }

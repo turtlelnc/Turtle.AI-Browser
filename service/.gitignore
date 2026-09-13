@@ -1,0 +1,7 @@
+# 边车服务：忽略构建产物与本地依赖
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 本地临时文件
+*.tmp

@@ -97,7 +97,9 @@ class AppStore {
   async initSecret(): Promise<SecretBackendStatus> {
     this.init()
     this.apiKeyPlain = await secrets.get(API_KEY_SECRET)
-    return secrets.status()
+    // 启动时真实探测一次加密后端（Windows 上会试跑一次 PowerShell 验证 DPAPI 可用），
+    // 否则「是否不安全」的状态在第一次写入密钥前都是未知的，会误导用户。
+    return secrets.probe()
   }
 
   /** 返回给调用方的设置（API key 只暴露掩码） */

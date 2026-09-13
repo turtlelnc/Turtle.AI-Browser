@@ -299,6 +299,15 @@ export interface AiConnectionState {
 /** AI 模式：浏览 / 本地办公 / 本地开发 */
 export type AiMode = 'browse' | 'office' | 'dev'
 
+/** 对话消息（`src/shared/types.ts` 里也有同名结构，本文件是 v1.0.0-rc1 的权威版本） */
+export interface AiMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+/** 智能体控制权限档位 */
+export type CliPermissionLevel = 'off' | 'daily' | 'developer' | 'full'
+
 export interface AiModeInfo {
   mode: AiMode
   /** 本地开发模式的沙箱工作目录，null 表示未选择 */
@@ -313,15 +322,15 @@ export interface AiModeInfo {
 
 export interface AiChatPayload {
   requestId: string
-  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
+  messages: AiMessage[]
   mode?: AiMode
 }
 
 export interface AiAgentPayload {
   requestId: string
-  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>
-  /** 控制权限档位，对应 `src/shared/types.ts` 的 CliPermissionLevel */
-  permission?: 'off' | 'daily' | 'developer' | 'full'
+  messages: AiMessage[]
+  /** 控制权限档位 */
+  permission?: CliPermissionLevel
 }
 
 export interface AiToolEvent {
@@ -669,6 +678,8 @@ export interface TibBridge {
   signOut(provider: AccountProvider): Promise<OkResult>
   getSyncState(): Promise<SyncState>
   setSyncToggles(patch: Partial<SyncToggles>): Promise<SyncState>
+  /** 同步总开关（未登录时应由原生侧拒绝并给出提示） */
+  setSyncEnabled(enabled: boolean): Promise<SyncState>
   syncNow(): Promise<SyncState>
   profileExport(): Promise<ProfileTransferResult>
   profileImport(): Promise<ProfileTransferResult | null>
@@ -724,5 +735,14 @@ declare global {
      * 消费方必须通过 `src/renderer/src/bridge.ts` 导出的 `tib` 访问。
      */
     tib?: TibBridge
+    /**
+     * 首屏引导数据（由 tib://ui/index.html 在渲染前内联写入）。
+     * 用于在 React 挂载前就确定皮肤 / 主题 / 性能档，避免首帧闪烁。
+     */
+    __TIB_BOOT__?: {
+      skin?: 'tibrowser' | 'edge' | 'chrome'
+      theme?: 'light' | 'dark' | 'system'
+      perf?: 'high' | 'low'
+    }
   }
 }
