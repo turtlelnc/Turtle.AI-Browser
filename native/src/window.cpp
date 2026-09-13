@@ -1,6 +1,7 @@
 // 浏览器窗口实现：多标签、布局、事件回传
 #include "window.h"
 
+#include "local_server.h"
 #include "router.h"
 #include "scheme.h"
 #include "security.h"
@@ -40,8 +41,54 @@ CefRefPtr<CefValue> AsValue(CefRefPtr<CefListValue> list) {
 /** 颜色：深浅两套主题的窗口底色 */
 constexpr uint32_t kBgColor = 0xFF1C1C1E;
 
-/** 上行调用前缀：必须与 src/bootstrap/index.ts 的 CALL_PREFIX 保持一致 */
+/** 上线调用前缀：必须与 src/bootstrap/index.ts 的 CALL_PREFIX 一致 */
 constexpr char kHostCallPrefix[] = "__TIB_CALL__";
+
+/**
+ * 单次外壳状态采样任务。
+ * 放在匿名命名空间内，避免污染 tib 命名空间；实现见文件末尾。
+ */
+class UiProbeTask : public CefTask {
+ public:
+  UiProbeTask(TibWindow* window, int round) : window_(window), round_(round) {}
+  void Execute() override {
+    if (!window_) return;
+    window_->RunInChrome(kUiProbeScript);
+  }
+
+ private:
+  static constexpr const char* kUiProbeScript = R"JS(
+(function () {
+  function report(msg) {
+    try { console.log('__TIB_CALL__' + JSON.stringify({ id: 0, method: 'diagnostics.log', params: { message: msg } })); } catch (e) {}
+  }
+  try {
+    var rootEl = document.getElementById('root');
+    var appEl = document.querySelector('.app') || rootEl;
+    var box = appEl && appEl.getBoundingClientRect ? appEl.getBoundingClientRect() : { width: 0, height: 0 };
+    var text = (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 100);
+    report('href=' + location.href
+      + ' | ready=' + document.readyState
+      + ' | tib=' + (typeof window.tib)
+      + ' | host=' + (typeof (window.__tibHost && window.__tibHost.call))
+      + ' | replyFn=' + (typeof window.__tibDeliverReply)
+      + ' | deliverEvent=' + (typeof window.__tibDeliverEvent)
+      + ' | rootKids=' + (rootEl ? rootEl.childElementCount : -1)
+      + ' | appBox=' + Math.round(box.width) + 'x' + Math.round(box.height)
+      + ' | bodyBg=' + getComputedStyle(document.body).backgroundColor
+      + ' | skin=' + (document.documentElement.dataset.skin || 'n/a')
+      + ' | title=' + document.title
+      + ' | text=' + text);
+  } catch (e) {
+    report('自检异常：' + (e && e.message ? e.message : String(e)));
+  }
+})();
+)JS";
+
+  TibWindow* window_;
+  int round_;
+  IMPLEMENT_REFCOUNTING(UiProbeTask);
+};
 
 }  // namespace
 
@@ -93,8 +140,10 @@ std::string TibWindow::CreateTab(const std::string& input, bool activate) {
   // 直接赋给 CefRefPtr 会触发 "Check failed: !needs_adopt_ref_" 断言，
   // 必须先取出裸指针，让 CefRefPtr 走 adopt 语义。
   // 委托必须是 PageViewDelegate（声明 Alloy 风格），否则视图会被窗口拒绝挂载。
+  // 初始 URL 用 about:blank：tib:// 的 scheme handler 此刻尚未装好，直接给会报
+  // ERR_UNKNOWN_URL_SCHEME（新标签页的真实入口在 OnTabCreated 里加载）。
   CefBrowserView* raw_view =
-      CefBrowserView::CreateBrowserView(client, "tib://newtab", browser_settings, nullptr, context,
+      CefBrowserView::CreateBrowserView(client, "about:blank", browser_settings, nullptr, context,
                                         new PageViewDelegate(this, id))
           .release();
   Log("CreateTab: BrowserView 已创建");
@@ -335,11 +384,20 @@ void TibWindow::SetSidebarWidth(int width) {
 
 void TibWindow::Layout() {
   if (!window_) return;
-  const CefRect bounds = window_->GetBoundsInScreen();
   CefRect client = window_->GetClientAreaBoundsInScreen();
   const int width = client.width;
   const int height = client.height;
-  (void)bounds;
+
+  // 布局诊断：窗口尺寸为 0 或视图边界为 0 都会导致"窗口在、内容看不见"
+  static int last_w = -1;
+  static int last_h = -1;
+  if (width != last_w || height != last_h) {
+    last_w = width;
+    last_h = height;
+    Log("Layout: 客户区 " + std::to_string(width) + "x" + std::to_string(height) + " chrome高=" +
+        std::to_string(chrome_height_) + " 侧栏=" + std::to_string(sidebar_width_) +
+        " 被最小化=" + (window_->IsMinimized() ? "是" : "否"));
+  }
 
   if (chrome_view_) {
     chrome_view_->SetBounds(CefRect(0, 0, width, chrome_height_));
@@ -434,15 +492,84 @@ std::string TibWindow::GetStateJson() {
 
 void TibWindow::RunInChrome(const std::string& js) {
   CefRefPtr<CefBrowser> chrome = chrome_browser();
-  if (chrome && chrome->GetMainFrame()) {
-    chrome->GetMainFrame()->ExecuteJavaScript(js, chrome->GetMainFrame()->GetURL(), 0);
+  if (!chrome) {
+    Log("RunInChrome: 外壳浏览器不存在，脚本被丢弃（长度 " + std::to_string(js.size()) + "）");
+    return;
   }
+  CefRefPtr<CefFrame> frame = chrome->GetMainFrame();
+  if (!frame || !frame->IsValid()) {
+    // 页面尚未加载或已跳转：此时的 frame 是 detached 的，
+    // CEF 会打印 "SendJavaScript sent to detached frame ... will be ignored" 并丢弃脚本。
+    Log("RunInChrome: 外壳页面主框架不可用（未加载/已跳转），脚本被丢弃（长度 " +
+        std::to_string(js.size()) + "）");
+    return;
+  }
+  frame->ExecuteJavaScript(js, frame->GetURL(), 0);
 }
 
 void TibWindow::SyncState() {
   const std::string json = GetStateJson();
   RunInChrome("window.__tibDeliverEvent && window.__tibDeliverEvent('state', JSON.stringify(" + json +
               "))");
+}
+
+/**
+ * 周期性诊断：把外壳页面的真实状态回流到原生日志。
+ *
+ * 为什么需要定时：页面加载是异步的，OnWindowCreated 时执行的自检往往跑在
+ * 文档就绪之前。这个定时器反复采样，既能确认桥是否连通，
+ * 也能在 UI 崩溃/白屏时留下可读证据。
+ */
+void TibWindow::StartUiDiagnostics(int times, int interval_ms) {
+  for (int i = 1; i <= times; ++i) {
+    const int64_t delay = static_cast<int64_t>(interval_ms) * i;
+    CefPostDelayedTask(TID_UI, new UiProbeTask(this, i), delay);
+  }
+}
+
+/**
+ * 首窗激活兜底。
+ *
+ * 本机实测：CEF 创建 Alloy 顶层窗口时，窗口会落在"最小化 + 屏幕外"的状态
+ * （GetWindowRect 为 -21333,-21333 且 IsIconic 为真），仅调用 Show() 不足以解除，
+ * 桌面与截图工具都看不到它。这里在窗口创建后延迟再强制走一遍
+ * 居中 → Restore → Show → Activate，并把最终状态写进日志便于确认。
+ */
+class WindowActivateTask : public CefTask {
+ public:
+  explicit WindowActivateTask(TibWindow* window) : window_(window) {}
+  void Execute() override {
+    if (window_) window_->EnsureVisibleOnScreen();
+  }
+
+ private:
+  TibWindow* window_;
+  IMPLEMENT_REFCOUNTING(WindowActivateTask);
+};
+
+void TibWindow::ScheduleActivationFallback() {
+  CefPostDelayedTask(TID_UI, new WindowActivateTask(this), 1200);
+}
+
+void TibWindow::EnsureVisibleOnScreen() {
+  if (!window_) return;
+  CefRect client = window_->GetClientAreaBoundsInScreen();
+  if (client.width < 200 || client.height < 150) {
+    Log("窗口尺寸异常（" + std::to_string(client.width) + "x" + std::to_string(client.height) +
+        "），重新居中为 1200x720");
+    window_->CenterWindow(CefSize(1200, 720));
+  }
+  if (window_->IsMinimized()) {
+    Log("窗口处于最小化，执行 Restore");
+    window_->Restore();
+  }
+  window_->Show();
+  window_->Activate();
+  Layout();
+  const CefRect after = window_->GetClientAreaBoundsInScreen();
+  Log("窗口可见性兜底完成：客户区 " + std::to_string(after.width) + "x" +
+      std::to_string(after.height) + "，最小化=" + (window_->IsMinimized() ? "是" : "否"));
+
 }
 
 void TibWindow::OnTabTitle(const std::string& tab_id, const std::string& title) {
@@ -504,14 +631,13 @@ void TibWindow::OnTabCreated(const std::string& tab_id, CefRefPtr<CefBrowser> br
   (void)client;
   Log("OnTabCreated: 网页视图就绪 id=" + tab_id + " 视图已挂载=" +
       (((*it)->view != nullptr) ? "是" : "否"));
-  // 浏览器此时才真正就绪，执行创建时挂起的首次导航
-  if (!(*it)->pending_url.empty() && browser && browser->GetMainFrame()) {
-    const std::string url = (*it)->pending_url;
-    (*it)->pending_url.clear();
-    (*it)->info.is_new_tab = false;
-    Log("首个导航：" + url);
-    browser->GetMainFrame()->LoadURL(url);
-  }
+  if (!browser || !browser->GetMainFrame()) return;
+  const std::string url =
+      (*it)->pending_url.empty() ? NewTabUrl() : (*it)->pending_url;
+  (*it)->pending_url.clear();
+  (*it)->info.is_new_tab = (url.find("/ui/index.html#/newtab") != std::string::npos);
+  Log("执行导航：" + url);
+  browser->GetMainFrame()->LoadURL(url);
 }
 
 void TibWindow::OnTabClosed(const std::string& tab_id) {
@@ -538,13 +664,21 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   chrome_client_ = new ChromeClient(this);
   Log("OnWindowCreated: ChromeClient 就绪");
   // 同上：新建引用必须取出裸指针再交给 CefRefPtr（adopt 语义）
+  //
+  // 外壳 UI 走本地回环 HTTP：本机实测 tib:// 在 CefBrowserView 中始终返回
+  // ERR_UNKNOWN_URL_SCHEME（详见 native/include/local_server.h）。
+  // 初始 URL 用 about:blank，真正的入口在下面显式 LoadURL ——
+  // CreateBrowserView 内部会立刻发起加载，那时上下文未必就绪。
   CefBrowserView* raw_chrome =
-      CefBrowserView::CreateBrowserView(chrome_client_, "tib://ui/index.html", chrome_settings,
-                                        nullptr, nullptr, this)
+      CefBrowserView::CreateBrowserView(chrome_client_, "about:blank", chrome_settings, nullptr,
+                                        nullptr, new ChromeViewDelegate(this))
           .release();
   chrome_view_ = raw_chrome;
   window->AddChildView(chrome_view_);
   Log("OnWindowCreated: 外壳 UI 视图已挂载");
+
+  // 外壳 UI 的加载由 ChromeViewDelegate::OnBrowserCreated → OnChromeViewReady 负责，
+  // 这里不再重复 LoadURL（重复加载会让 frame 变成 detached）。
   window->Show();
   window->Activate();
   // 本机实测：CEF 首次创建 Alloy 窗口时会落到"最小化"状态（IsWindowVisible 为真但
@@ -555,11 +689,36 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   Log("OnWindowCreated: 窗口已显示");
 
   // 首个标签页
-  // 首个标签页：命令行给了 --url= 就直接打开，否则新标签页
-  CreateTab(AppContext::Get().startup_url(), true);
-  Log("OnWindowCreated: 标签页已建");
+  // 启动周期性 UI 诊断（桥/渲染状态回流到原生日志）
+  StartUiDiagnostics(6, 2500);
+  ScheduleActivationFallback();
+
+  // ---- 标签页创建：集中在这里，顺序确定 ----
+  // 诊断模式：把脚本执行探针作为唯一标签页打开。
+  // 目的：验证"页面里的脚本到底跑不跑"——探针只做两件事：console.log 一条日志、改标题。
+  // 探针页由本地服务器提供（file:// 在本机 CEF 上会 ERR_FAILED）。
+  std::string first_tab_url = AppContext::Get().startup_url();
+  if (AppContext::Get().diag()) {
+    const std::string probe = DiagnosticProbeUrl();
+    if (!probe.empty()) {
+      Log("诊断模式：首个标签页改为脚本执行探针 " + probe);
+      first_tab_url = probe;
+    }
+  }
+  Log("OnWindowCreated: 创建首个标签页");
+  CreateTab(first_tab_url, true);
+
+  // --open=<url> 指定的附加标签页（自动化验证用）
+  for (const std::string& extra : AppContext::Get().extra_urls()) {
+    Log("按命令行要求打开附加标签页：" + extra);
+    CreateTab(extra, true);
+  }
+
   Layout();
   Log("OnWindowCreated: 布局完成");
+
+  // 视图已挂载并完成布局，这时加载外壳 UI 才不会被丢弃
+  LoadChromeUi();
 }
 
 void TibWindow::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
@@ -607,11 +766,98 @@ CefRect TibWindow::GetInitialBounds(CefRefPtr<CefWindow> window) {
 
 void TibWindow::OnBrowserCreated(CefRefPtr<CefBrowserView> browser_view,
                                  CefRefPtr<CefBrowser> browser) {
-  if (browser_view == chrome_view_) {
-    // 外壳 UI 就绪后推送一次状态
-    SyncState();
-  }
+  (void)browser_view;
+  (void)browser;
+  // 网页视图的就绪由 PageViewDelegate 负责；这里保留给未来需要窗口级处理的场景
+  Log("OnBrowserCreated(TibWindow)：网页视图");
 }
+
+void ChromeViewDelegate::OnBrowserCreated(CefRefPtr<CefBrowserView> browser_view,
+                                          CefRefPtr<CefBrowser> browser) {
+  (void)browser_view;
+  (void)browser;
+  Log("OnBrowserCreated(外壳 UI)：外壳视图已就绪");
+  // 在这里加载是安全的：该回调发生在视图完成创建之后，主框架此时才真正可用。
+  // 放在 OnWindowCreated 里会落在 detached frame 上被 CEF 丢弃（实测服务器收不到请求）。
+  if (window_) window_->LoadChromeUi();
+}
+
+/**
+ * 外壳视图就绪标记。
+ *
+ * 注意：这个回调是在 CreateBrowserView **内部**触发的，此时视图还没 AddChildView 到窗口上。
+ * 实测在这个时点调用 LoadURL 会被丢弃（服务器收不到任何请求，页面最终是空白）。
+ * 所以这里只记状态，真正的加载放到视图挂载完成之后（OnWindowCreated 末尾）。
+ */
+void TibWindow::OnChromeViewReady() {
+  chrome_view_ready_ = true;
+  Log("OnChromeViewReady: 外壳视图已就绪（等待挂载后再加载 UI）");
+}
+
+/** 视图挂载完成后再加载外壳 UI，并在加载完成后推送状态与自检 */
+void TibWindow::LoadChromeUi() {
+  const std::string ui_url = UiUrl();
+  CefRefPtr<CefBrowser> chrome = chrome_browser();
+  if (!chrome || !chrome->GetMainFrame()) {
+    Log("LoadChromeUi: 浏览器或主框架不可用");
+    return;
+  }
+  if (ui_url.empty()) {
+    Log("LoadChromeUi: 本地服务器未就绪，外壳 UI 无法加载（会显示空白）");
+    return;
+  }
+  Log("LoadChromeUi: 加载外壳 UI " + ui_url);
+  chrome->GetMainFrame()->LoadURL(ui_url);
+}
+
+/**
+ * 外壳 UI 自检：在渲染进程里检查桥、React 挂载与关键样式，把结论回流到原生日志。
+ * 为什么不用 CDP：本机实测 CEF 的调试 WebSocket 会挂起，而这条链路走的是
+ * 我们自己的 console 上行通道，既验证了桥本身，又不依赖外部工具。
+ */
+void TibWindow::RunUiSelfTest() {
+  const char* js = R"JS(
+(function () {
+  function report(msg) {
+    try { console.log('__TIB_CALL__' + JSON.stringify({ id: 0, method: 'diagnostics.log', params: { message: msg } })); } catch (e) {}
+  }
+  try {
+    var root = document.documentElement;
+    var rootEl = document.getElementById('root');
+    var appEl = document.querySelector('.app') || rootEl;
+    var box = appEl && appEl.getBoundingClientRect ? appEl.getBoundingClientRect() : { width: 0, height: 0 };
+    var cs = appEl ? getComputedStyle(appEl) : null;
+    var text = (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 120);
+    report('href=' + location.href
+      + ' | tib=' + (typeof window.tib)
+      + ' | host=' + (typeof (window.__tibHost && window.__tibHost.call))
+      + ' | dispatch=' + (typeof window.__tibDeliverReply)
+      + ' | rootKids=' + (rootEl ? rootEl.childElementCount : -1)
+      + ' | appBox=' + Math.round(box.width) + 'x' + Math.round(box.height)
+      + ' | bodyBg=' + getComputedStyle(document.body).backgroundColor
+      + ' | appBg=' + (cs ? cs.backgroundColor : 'n/a')
+      + ' | skin=' + (root.dataset.skin || 'n/a')
+      + ' | theme=' + (root.dataset.theme || 'n/a')
+      + ' | title=' + document.title
+      + ' | text=' + text);
+    // 顺带验证一次真实往返（异步，结果单独回流）
+    if (window.tib && window.tib.getState) {
+      window.tib.getState().then(function (s) {
+        report('getState 往返成功：标签数=' + ((s && s.tabs) ? s.tabs.length : 'n/a')
+          + ' 皮肤=' + (s && s.settings ? s.settings.skin : 'n/a'));
+      }, function (e) {
+        report('getState 往返失败：' + (e && e.message ? e.message : String(e)));
+      });
+    }
+  } catch (e) {
+    report('自检脚本异常：' + (e && e.message ? e.message : String(e)));
+  }
+})();
+)JS";
+  RunInChrome(js);
+}
+
+;
 
 void PageViewDelegate::OnBrowserCreated(CefRefPtr<CefBrowserView> browser_view,
                                         CefRefPtr<CefBrowser> browser) {
@@ -629,8 +875,55 @@ void ChromeClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   if (window_) window_->SyncState();
 }
 
-bool ChromeClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
-                                    cef_log_severity_t level,
+void ChromeClient::OnLoadError(CefRefPtr<CefBrowser> browser,
+                               CefRefPtr<CefFrame> frame,
+                               ErrorCode errorCode,
+                               const CefString& errorText,
+                               const CefString& failedUrl) {
+  (void)browser;
+  if (errorCode == ERR_ABORTED) return;
+  Log("外壳 UI 加载失败：" + failedUrl.ToString() + " :: " + errorText.ToString() + "（错误码 " +
+      std::to_string(static_cast<int>(errorCode)) + "）");
+}
+
+void ChromeClient::OnLoadStart(CefRefPtr<CefBrowser> browser,
+                               CefRefPtr<CefFrame> frame,
+                               TransitionType transition_type) {
+  (void)browser;
+  (void)transition_type;
+  if (frame && frame->IsMain()) Log("外壳 UI 开始加载：" + frame->GetURL().ToString());
+}
+
+void ChromeClient::OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
+                                        bool isLoading,
+                                        bool canGoBack,
+                                        bool canGoForward) {
+  (void)browser;
+  (void)canGoBack;
+  (void)canGoForward;
+  Log(std::string("外壳 UI 加载状态：") + (isLoading ? "加载中" : "已停止"));
+}
+
+void ChromeClient::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) {
+  (void)browser;
+  Log("外壳 UI 标题：" + title.ToString());
+}
+
+void ChromeClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
+                             CefRefPtr<CefFrame> frame,
+                             int httpStatusCode) {
+  if (!frame || !frame->IsMain()) return;
+  Log("外壳 UI 加载完成：" + frame->GetURL().ToString() + "（HTTP " +
+      std::to_string(httpStatusCode) + "）");
+  // 页面就绪后才推送状态与跑自检：此前的 frame 是 detached 的，脚本会被 CEF 丢弃
+  if (window_) {
+    window_->SyncState();
+    window_->RunUiSelfTest();
+    window_->StartUiDiagnostics(6, 2000);
+  }
+}
+
+bool ChromeClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,                                    cef_log_severity_t level,
                                     const CefString& message,
                                     const CefString& source,
                                     int line) {
@@ -639,6 +932,8 @@ bool ChromeClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
   (void)source;
   (void)line;
   const std::string text = message.ToString();
+  // 诊断：确认 console 通道本身是通的（页面里任何一条日志都会走到这里）
+  Log("UI console[" + std::to_string(static_cast<int>(level)) + "]: " + text.substr(0, 300));
   if (text.rfind(kHostCallPrefix, 0) != 0) return false;
   HandleHostCall(window_ ? window_->chrome_browser() : nullptr,
                  text.substr(sizeof(kHostCallPrefix) - 1));

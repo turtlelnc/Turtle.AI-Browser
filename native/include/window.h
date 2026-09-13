@@ -12,13 +12,14 @@ class TibWindow;
  * 上行调用不走 CEF 的 CefMessageRouter（本机会触发内部断言崩溃），
  * 而是监听渲染进程的 console 消息：注入脚本把调用打成带前缀的单行 JSON。
  */
-class ChromeClient : public CefClient, public CefLifeSpanHandler, public CefDisplayHandler {
+class ChromeClient : public CefClient, public CefLifeSpanHandler, public CefDisplayHandler, public CefLoadHandler {
  public:
   explicit ChromeClient(TibWindow* window) : window_(window) {}
 
   // CefClient
   CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
+  CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
 
   // CefDisplayHandler：捕获带前缀的 console 消息作为宿主调用
   bool OnConsoleMessage(CefRefPtr<CefBrowser> browser,
@@ -26,6 +27,26 @@ class ChromeClient : public CefClient, public CefLifeSpanHandler, public CefDisp
                         const CefString& message,
                         const CefString& source,
                         int line) override;
+  void OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) override;
+
+  // CefLoadHandler：加载状态变化 / 开始 / 完成 / 失败都要留证据
+  void OnLoadingStateChange(CefRefPtr<CefBrowser> browser,
+                            bool isLoading,
+                            bool canGoBack,
+                            bool canGoForward) override;
+  void OnLoadStart(CefRefPtr<CefBrowser> browser,
+                   CefRefPtr<CefFrame> frame,
+                   TransitionType transition_type) override;
+  void OnLoadEnd(CefRefPtr<CefBrowser> browser,
+                 CefRefPtr<CefFrame> frame,
+                 int httpStatusCode) override;
+
+  // CefLoadHandler：外壳页面加载失败时留下证据
+  void OnLoadError(CefRefPtr<CefBrowser> browser,
+                   CefRefPtr<CefFrame> frame,
+                   ErrorCode errorCode,
+                   const CefString& errorText,
+                   const CefString& failedUrl) override;
 
   // CefLifeSpanHandler
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override;
@@ -139,6 +160,34 @@ class PageViewDelegate : public CefBrowserViewDelegate {
   IMPLEMENT_REFCOUNTING(PageViewDelegate);
 };
 
+/**
+ * 外壳 UI 视图的委托。
+ *
+ * 为什么需要单独一个委托：CefBrowserView::CreateBrowserView 会在**内部同步**调用
+ * OnBrowserCreated，那时 TibWindow::chrome_view_ 还没赋值，
+ * 用 `browser_view == chrome_view_` 去认领回调必然失败（实测该回调因此从未触发）。
+ * 由委托自己携带身份，就不依赖这种时序比较了。
+ */
+class ChromeViewDelegate : public CefBrowserViewDelegate {
+ public:
+  explicit ChromeViewDelegate(TibWindow* window) : window_(window) {}
+  void OnBrowserCreated(CefRefPtr<CefBrowserView> browser_view,
+                        CefRefPtr<CefBrowser> browser) override;
+  cef_runtime_style_t GetBrowserRuntimeStyle() override { return CEF_RUNTIME_STYLE_ALLOY; }
+
+ private:
+  TibWindow* window_;
+  IMPLEMENT_REFCOUNTING(ChromeViewDelegate);
+};
+
+/**
+ * 截图并把 PNG（base64）写到 path。成功返回 true。
+ *
+ * 这是"界面到底画出来没有"的权威证据：本机实测 PrintWindow 对 GPU 合成的
+ * Chromium 窗口只能抓到白屏/桌面，而 CefBrowserHost::GetImage 直接向合成器取像素，
+ * 且不要求窗口在前台。
+ */
+
 /** 一个浏览器窗口（无边框 CefWindow）：持有外壳 UI 与所有标签页 */
 class TibWindow : public CefWindowDelegate, public CefBrowserViewDelegate {
  public:
@@ -192,6 +241,18 @@ class TibWindow : public CefWindowDelegate, public CefBrowserViewDelegate {
                     CefRefPtr<PageClient> client);
   /** 由 PageViewDelegate 回调：网页视图已创建（执行挂起的首次导航） */
   void OnBrowserViewCreated(CefRefPtr<CefBrowserView> browser_view, CefRefPtr<CefBrowser> browser);
+  /** 外壳 UI 视图就绪（由 ChromeViewDelegate 回调） */
+  void OnChromeViewReady();
+  /** 视图挂载完成后再加载外壳 UI（过早 LoadURL 会被丢弃） */
+  void LoadChromeUi();
+  /** 在渲染进程里跑一次外壳自检，结论回流到原生日志 */
+  void RunUiSelfTest();
+  /** 周期性采样外壳页面状态（times 次，每 interval_ms 毫秒一次），结论回流原生日志 */
+  void StartUiDiagnostics(int times, int interval_ms);
+  /** 窗口可见性兜底：居中 + 恢复 + 置前（CEF 首窗会落在最小化/屏幕外） */
+  void EnsureVisibleOnScreen();
+  /** 延迟调度一次可见性兜底 */
+  void ScheduleActivationFallback();
   void OnTabClosed(const std::string& tab_id);
   /** 请求在新标签页打开（target=_blank / 中键） */
   bool OpenInNewTab(const std::string& url);
@@ -230,6 +291,7 @@ class TibWindow : public CefWindowDelegate, public CefBrowserViewDelegate {
   struct Tab;
 
   bool incognito_ = false;
+  bool chrome_view_ready_ = false;
   CefRefPtr<CefWindow> window_;
   CefRefPtr<ChromeClient> chrome_client_;
   CefRefPtr<CefBrowserView> chrome_view_;

@@ -4,6 +4,7 @@
 #include "router.h"
 
 #include <algorithm>
+#include <fstream>
 
 namespace tib {
 namespace {
@@ -54,35 +55,18 @@ std::string PercentDecode(const std::string& in) {
 }
 
 /**
- * 创建 __tibHost 的小垫片：把调用转成 CEF 消息路由的查询。
- * 与 tib-host.js 分开是因为前者是「传输」，后者是「协议与 API」。
+ * 宿主注入脚本的读取与拼接。
+ *
+ * 传输垫片（window.__tibHost）由注入脚本自己提供：它直接 console.log 带前缀的单行 JSON，
+ * 原生在 ChromeClient::OnConsoleMessage 接收，回执走 ExecuteJavaScript 调
+ * window.__tibDeliverReply。
+ *
+ * ⚠️ 这里**不要**再注入任何依赖 CEF 消息路由（window.cefQuery / tibPreload）的垫片：
+ * 消息路由已废弃（见 docs/ARCHITECTURE.md §7），残留的旧垫片会先占用 __tibHost
+ * 却又找不到 tibPreload，导致桥完全不通且只在控制台留一行错误。
+ *
+ * HostBridgeScript() 声明在 router.h（实现在 router.cpp）。
  */
-std::string HostTransportScript() {
-  return R"JS(
-(function () {
-  window.__tibHost = {
-    call: function (id, method, params) {
-      if (typeof window.tibPreload !== 'function') {
-        console.error('[TiBrowser] 原生消息路由不可用（tibPreload 未注入）');
-        if (window.__tibDeliverReply) {
-          window.__tibDeliverReply(id, false, null, '原生消息路由不可用');
-        }
-        return;
-      }
-      window.tibPreload({
-        request: JSON.stringify({ id: id, method: method, params: params || {} }),
-        persistent: false,
-        onFailure: function (code, message) {
-          if (window.__tibDeliverReply) {
-            window.__tibDeliverReply(id, false, null, message || ('原生调用失败（' + code + '）'));
-          }
-        }
-      });
-    }
-  };
-})();
-)JS";
-}
 
 /** 取引导数据（皮肤 / 主题 / 性能档），供首屏防闪烁 */
 std::string BootDataScript() {
@@ -92,19 +76,10 @@ std::string BootDataScript() {
 }
 
 /**
- * 把宿主脚本内联进 index.html。
- * 必须在 UI 自身的 module 脚本之前执行，否则 React 首次渲染时拿不到 window.tib，
- * 会退化到 mock 桥并提示"未检测到原生宿主"。
+ * 说明：宿主脚本的注入已移到 local_server.cpp（外壳 UI 改由本地回环 HTTP 提供）。
+ * 本文件保留 tib:// 处理器作为遗留/备用路径，只回原始文件，不再改写内容。
+ * 原因是本机实测 tib:// 在 CefBrowserView 中始终返回 ERR_UNKNOWN_URL_SCHEME。
  */
-std::string InjectHostBridge(const std::string& html) {
-  const std::string script =
-      "<script>" + HostTransportScript() + "</script>" + "<script>" + HostBridgeScript() +
-      "</script>" + BootDataScript();
-  const std::string marker = "<head>";
-  const size_t pos = html.find(marker);
-  if (pos == std::string::npos) return script + html;
-  return html.substr(0, pos + marker.size()) + "\n" + script + html.substr(pos + marker.size());
-}
 
 /** 资源处理器：从内存缓冲区回给渲染进程 */
 class BufferResourceHandler : public CefResourceHandler {
@@ -184,6 +159,7 @@ class TibSchemeHandler : public CefResourceHandler {
     // 这里刻意不加 CEF_REQUIRE_IO_THREAD()——加了会在页面加载时直接断言崩溃。
     // 处理器本身无可变共享状态，且未缓存跨线程数据，故不需要线程亲和。
     const std::string url = request->GetURL().ToString();
+    Log("tib:// 请求：" + url);
     const std::string path = ResolveTibResource(url);
     if (path.empty()) {
       body_ = MissingUiPage();
@@ -199,11 +175,8 @@ class TibSchemeHandler : public CefResourceHandler {
       return true;
     }
     mime_ = MimeForPath(path);
-    // HTML 入口必须内联宿主脚本：window.tib / window.__tibHost / 首屏引导数据
-    if (mime_ == "text/html") {
-      body_ = InjectHostBridge(body_);
-    }
     status_ = 200;
+    Log("tib:// 响应：" + url + " → " + mime_ + " " + std::to_string(body_.size()) + " 字节");
     return true;
   }
 

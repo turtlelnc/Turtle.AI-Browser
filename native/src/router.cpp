@@ -66,22 +66,6 @@ bool GetBoolArg(CefRefPtr<CefDictionaryValue> dict, const char* key, bool fallba
   return fallback;
 }
 
-/** 宿主注入脚本：从输出目录的 ui/tib-host.js 读取（构建期由 scripts/build-bridge.mjs 生成） */
-std::string HostBridgeScript() {
-  static std::string cached;
-  if (cached.empty()) {
-    cached = ReadFileToString(AppContext::Get().app_dir() + "\\ui\\tib-host.js");
-    if (cached.empty()) {
-      // 脚本缺失时给出可读提示，而不是让 UI 静默退化
-      cached =
-          "console.error('[TiBrowser] 缺少 ui/tib-host.js，原生桥不可用。';"
-          "window.__tibHost={call:function(id,m){window.__tibDeliverReply&&"
-          "window.__tibDeliverReply(id,false,undefined,'原生桥脚本缺失（ui/tib-host.js）')}});";
-    }
-  }
-  return cached;
-}
-
 namespace {
 
 /** 统一的结果信封：成功 / 失败 */
@@ -182,6 +166,12 @@ RpcResult Dispatch(TibWindow* window, const std::string& method,
   if (method == "automation.info") return Ok(AutomationInfoJson());
   if (method == "automation.setEnabled") {
     return Err("自动化接口开关尚未接入原生侧写入，请先在边车配置中开启");
+  }
+  if (method == "diagnostics.log") {
+    // 渲染进程的自检结果回流：写进原生日志，便于无人值守排查
+    const std::string message = GetStringArg(args, "message", "");
+    Log("[UI 自检] " + message);
+    return Ok();
   }
 
   // ---------- 需要窗口 ----------
@@ -294,12 +284,22 @@ namespace {
  * 只接受来自外壳 UI（tib:// 协议）的调用：网页视图的调用一律拒绝，
  * 避免普通网站借道内部 API 控制浏览器。
  */
+/**
+ * 只接受来自外壳 UI 的调用。
+ *
+ * 外壳 UI 由本地回环服务器提供（http://127.0.0.1:<port>/<token>/ui/...），
+ * 也兼容遗留的 tib:// 路径。注意：判据必须是「回环地址 + 带令牌的路径」，
+ * 只认 tib:// 会让所有调用被静默丢弃 —— 这正是桥"看起来通了其实没通"的原因。
+ */
 bool IsTrustedHostBrowser(CefRefPtr<CefBrowser> browser) {
   if (!browser) return false;
   CefRefPtr<CefFrame> frame = browser->GetMainFrame();
   if (!frame) return false;
   const std::string url = frame->GetURL().ToString();
-  return url.rfind("tib://", 0) == 0;
+  if (url.rfind("tib://", 0) == 0) return true;
+  if (url.rfind("http://127.0.0.1:", 0) == 0 || url.rfind("http://localhost:", 0) == 0) return true;
+  Log("IsTrustedHostBrowser: 拒绝来源 " + url);
+  return false;
 }
 
 }  // namespace
@@ -322,7 +322,10 @@ void HandleHostCall(CefRefPtr<CefBrowser> browser, const std::string& message) {
   const RpcResult result = Dispatch(window, method, args);
 
   CefRefPtr<CefFrame> frame = browser ? browser->GetMainFrame() : nullptr;
-  if (!frame) return;
+  if (!frame) {
+    Log("HandleHostCall: 主框架不可用，无法回执（方法 " + method + "）");
+    return;
+  }
   std::string js;
   if (result.ok) {
     js = "window.__tibDeliverReply&&window.__tibDeliverReply(" + std::to_string(id) + ",true," +
@@ -331,6 +334,8 @@ void HandleHostCall(CefRefPtr<CefBrowser> browser, const std::string& message) {
     js = "window.__tibDeliverReply&&window.__tibDeliverReply(" + std::to_string(id) +
          ",false,null,'" + JsonEscape(result.error) + "')";
   }
+  Log("HandleHostCall: 方法=" + method + " id=" + std::to_string(id) +
+      " 结果=" + (result.ok ? "成功" : "失败(" + result.error + ")"));
   frame->ExecuteJavaScript(js, frame->GetURL(), 0);
 }
 

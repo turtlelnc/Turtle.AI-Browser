@@ -65,6 +65,7 @@ add_executable(TiBrowser WIN32
   src/security.cpp
   src/service_client.cpp
   src/util.cpp
+  src/local_server.cpp
   resources/tibrowser.rc   # 图标（来自根目录 ico.png）与版本信息
 )
 

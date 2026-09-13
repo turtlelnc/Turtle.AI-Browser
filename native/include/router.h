@@ -24,8 +24,7 @@ bool GetBoolArg(CefRefPtr<CefDictionaryValue> dict, const char* key, bool fallba
 /** 处理注入脚本发来的宿主调用（浏览器进程 UI 线程调用） */
 void HandleHostCall(CefRefPtr<CefBrowser> browser, const std::string& message);
 
-/** 宿主注入脚本内容（读取输出目录的 ui/tib-host.js） */
-std::string HostBridgeScript();
+
 
 /** 把外壳 UI 的浏览器对象与窗口绑定，供路由反查窗口 */
 void RegisterWindowForChromeBrowser(CefRefPtr<CefBrowser> browser, TibWindow* window);

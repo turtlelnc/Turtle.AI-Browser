@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>脚本执行探针</title>
+    <!--
+      最小脚本探针：只做两件事 —— 打印一条日志、改一次标题。
+      用途：当"页面能打开但脚本像是没跑"时，用它区分
+        (a) 脚本执行/console 通道不通，还是
+        (b) React 包自身的问题。
+      观察方式：原生日志里应出现 "UI console" 与标题变化。
+    -->
+    <script>
+      console.log('__TIB_CALL__' + JSON.stringify({ id: 0, method: 'diagnostics.log', params: { message: 'script-probe: 脚本已执行' } }))
+      document.title = '脚本执行探针 OK'
+    </script>
+    <style>
+      body {
+        margin: 0;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0e8f84;
+        color: #fff;
+        font: 28px/1.5 system-ui, "Microsoft YaHei", sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    脚本执行探针：如果你看到这块绿色，说明页面渲染正常。
+  </body>
+</html>

@@ -91,14 +91,27 @@ class AppContext {
   const std::string& startup_url() const { return startup_url_; }
   void set_startup_url(const std::string& v) { startup_url_ = v; }
 
+  /**
+   * 启动后再额外打开的地址列表（--open=<url>，可重复）。
+   * 主要用途：自动化验证（把探针页开到新标签页里观察日志与标题）。
+   */
+  const std::vector<std::string>& extra_urls() const { return extra_urls_; }
+  void AddExtraUrl(const std::string& v) { extra_urls_.push_back(v); }
+
+  /** 诊断模式：为真时周期性把 UI/页面状态回流到日志（--diag） */
+  bool diag() const { return diag_; }
+  void set_diag(bool v) { diag_ = v; }
+
  private:
   bool incognito_ = false;
+  bool diag_ = false;
   std::string protection_level_ = "standard";
   std::string energy_mode_ = "standard";
   std::string skin_ = "tibrowser";
   std::string app_dir_;
   std::string user_data_dir_;
   std::string startup_url_;
+  std::vector<std::string> extra_urls_;
 };
 
 /** 生成一个短随机 id（标签页标识，不追求密码学强度） */

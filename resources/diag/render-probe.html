@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>TiBrowser 渲染探针</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        background: #ffffff;
+        font: 16px/1.6 system-ui, "Microsoft YaHei", sans-serif;
+      }
+      .band {
+        height: 60px;
+        display: flex;
+        align-items: center;
+        padding-left: 20px;
+        color: #fff;
+        font-size: 20px;
+        font-weight: 600;
+      }
+      .r {
+        background: #e5352b;
+      }
+      .g {
+        background: #1f9d55;
+      }
+      .b {
+        background: #1b6ef3;
+      }
+      .y {
+        background: #f2b705;
+        color: #222;
+      }
+      .box {
+        margin: 20px;
+        padding: 20px;
+        border: 3px solid #222;
+        border-radius: 12px;
+        font-size: 18px;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      TiBrowser 渲染探针页：纯静态 HTML/CSS，不含任何脚本。
+      用途：把「窗口/视图/合成器是否正常」与「React 包是否执行」两件事分开判断。
+      用 --url= 指向本页即可；若能看到四条色带，说明渲染管线正常，问题在脚本侧。
+    -->
+    <div class="band r">TiBrowser 渲染探针 · 第一行（红）</div>
+    <div class="band g">第二行（绿）</div>
+    <div class="band b">第三行（蓝）</div>
+    <div class="band y">第四行（黄）</div>
+    <div class="box">
+      如果你看到这四行彩色条和这个方框，说明原生 CEF 窗口、BrowserView 与合成器都在正常工作。<br />
+      下一步只需排查脚本执行路径。
+    </div>
+  </body>
+</html>
