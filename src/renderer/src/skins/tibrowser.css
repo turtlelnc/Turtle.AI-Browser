@@ -1,0 +1,65 @@
+/* ============================================================================
+ * TiBrowser 原生皮肤（默认）
+ * ----------------------------------------------------------------------------
+ * 【原创声明 / honesty note】
+ * TiBrowser 的全部皮肤都是**我们自己**用 CSS 令牌 + 自绘内联 SVG 实现的渲染，
+ * 只是「受 Edge / Chrome 的界面布局启发」的排布方式（标签位置、圆角气质、密度）。
+ * 本文件不包含、不复制任何 Microsoft Edge、Google Chrome 或其它第三方的
+ * 专有资源、商标、图标、字体或图片；上游产品的名称仅用于向用户说明「长得像什么」。
+ * ==========================================================================*/
+
+/* 颜色令牌由 base.css 的 :root / :root[data-theme='dark'] 提供（即 TiBrowser 默认值），
+ * 这里只声明本皮肤**独有**的形状、密度与图标语义。 */
+
+:root,
+:root[data-skin='tibrowser'] {
+  /* ---- 形状：胶囊标签，柔和大圆角 ---- */
+  --tb-tab-radius: 999px;
+  --tb-tab-radius-active: 999px;
+  --tb-tab-h: 40px;
+  --tb-tab-outer-h: 40px;
+  --tb-tab-gap: 8px;
+  --tb-tab-strip-pad: 8px 12px;
+  --tb-tab-max-w: 232px;
+  --tb-tab-font-size: 12.5px;
+  --tb-toolbar-h: 46px;
+  --tb-toolbar-pad: 0 14px;
+  --tb-bookmark-h: 32px;
+  --tb-omnibox-h: 34px;
+  --tb-omnibox-radius: 999px;
+  --tb-pill-radius: 999px;
+  --tb-btn-radius: 12px;
+  --tb-card-radius: 14px;
+  --tb-card-radius-lg: 20px;
+  --tb-section-gap: 28px;
+
+  /* ---- 图标语义：TiBrowser 使用更圆润、更大的线性图标 ---- */
+  --tb-icon-stroke: 2;
+  --tb-icon-tab: 16px;
+  --tb-icon-nav: 18px;
+  --tb-nav-btn-size: 34px;
+  --tb-tab-close-size: 18px;
+
+  /* ---- 动效：胶囊标签用「滑动 + 缩放」表达层次 ---- */
+  --tb-tab-transition: 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  --tb-tab-hover-lift: 1px;
+  --tb-newtab-radius: 18px;
+  --tb-tab-close-on-active: 1;
+}
+
+/* 胶囊标签：非激活态透明，激活态浮起并带柔和高光 */
+:root[data-skin='tibrowser'] .tab,
+:root:not([data-skin]) .tab {
+  border-radius: var(--tb-tab-radius);
+  padding: 0 10px 0 14px;
+}
+:root[data-skin='tibrowser'] .tab.active,
+:root:not([data-skin]) .tab.active {
+  background: var(--tb-tab-active);
+  box-shadow: var(--tb-elev-1);
+  transform: translateY(calc(-1 * var(--tb-tab-hover-lift)));
+}
+:root[data-skin='tibrowser'] .new-tab-btn,
+:root:not([data-skin]) .new-tab-btn {
+  border-radius: var(--tb-pill-radius);
+}

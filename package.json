@@ -1,10 +1,10 @@
 {
   "name": "tibrowser",
-  "version": "1.0.0-beta",
+  "version": "1.0.0-rc1",
   "description": "TIbrowser —— 基于 Chromium 内核的 AI 安全浏览器",
   "main": "out/main/index.js",
   "author": "TIbrowser",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "private": true,
   "scripts": {
     "dev": "electron-vite dev",
@@ -12,7 +12,15 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "build": "electron-vite build",
     "build:dir": "electron-vite build && electron-builder --dir --config electron-builder.yml",
-    "build:win": "electron-vite build && electron-builder --win --config electron-builder.yml"
+    "build:win": "electron-vite build && electron-builder --win --config electron-builder.yml",
+    "ui:dev": "vite --config vite.config.ts",
+    "ui:build": "vite build --config vite.config.ts",
+    "service:build": "npm --prefix service run build",
+    "service:test": "npm --prefix service run self-test",
+    "native:configure": "node scripts/build-native.mjs configure",
+    "native:build": "node scripts/build-native.mjs build",
+    "native:run": "node scripts/build-native.mjs run",
+    "fetch:cef": "node scripts/fetch-cef.mjs"
   },
   "dependencies": {
     "adm-zip": "^0.6.0",

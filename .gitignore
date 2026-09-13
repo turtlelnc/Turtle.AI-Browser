@@ -4,6 +4,18 @@ node_modules/
 # 构建产物
 out/
 dist/
+
+# CEF 内核（本地缓存，体积大，不入库；由 scripts/fetch-cef.mjs 自动下载）
+.cef-cache/
+third_party/cef/
+
+# 原生构建目录
+build-native/
+native/**/CMakeFiles/
+native/**/CMakeCache.txt
+*.pdb
+*.ilk
+*.obj
 # release 目录默认忽略，但保留安装包供用户直接下载
 release/*
 !release/*.exe

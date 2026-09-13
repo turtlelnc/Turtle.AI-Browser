@@ -1,0 +1,28 @@
+{
+  "name": "tib-service",
+  "version": "1.0.0-rc1",
+  "private": true,
+  "type": "module",
+  "description": "TiBrowser 边车服务（Node）：设置/密钥存储、书签历史、AI（OpenAI 兼容 + MCP + OAuth）、本地自动化 API、安全扫描与配置同步。",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "self-test": "node dist/selftest.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.5",
+    "@types/node": "^22.7.5",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.6.3"
+  }
+}

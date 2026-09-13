@@ -1,43 +1,102 @@
-# TIbrowser - 中文版
+# TIbrowser —— 基于 Chromium 内核的 AI 浏览器
 
-> 基于 Chromium 内核的 AI 安全浏览器 —— 拥有 Chrome 的大部分功能，内置 AI 助手与本地安全服务。  
-> 我们的官网 turtleweb.cc.cd ——— 基于 [README.md](https://github.com/turtlelnc/Turtle.AI-Browser/blob/main/README.md) 的内容进行 **生动立体** 的解释  
-> [🔗点击前往官网](https://turtleweb.cc.cd)
+> 真正的 Chromium 内核（CEF）+ React 外壳 + 可选 AI 边车服务。
+> 我们的官网 turtleweb.cc.cd ——— 基于 [README.md](https://github.com/turtlelnc/Turtle.AI-Browser/blob/main/README.md) 的内容进行 **生动立体** 的解释
+> [🔗 点击前往官网](https://turtleweb.cc.cd)
 
+[![Version](https://img.shields.io/badge/version-v1.0.0--rc1%20(build%20260913)-orange.svg)](#)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Electron](https://img.shields.io/badge/Electron-33-47848F.svg)](https://www.electronjs.org/)
+[![Chromium](https://img.shields.io/badge/Chromium%20%2F%20CEF-150-4285F4.svg)](https://cef-builds.spotifycdn.com/)
 [![React](https://img.shields.io/badge/React-18-61dafb.svg)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6.svg)](https://www.typescriptlang.org/)
+[![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933.svg)](https://nodejs.org/)
 
-TIbrowser 使用 **Electron（内嵌 Chromium 内核）+ React + TypeScript** 构建。它不依赖任何 Google 账号/同步服务，AI 能力完全由用户自备的 **OpenAI 兼容 API**（DeepSeek / OpenAI / 通义千问 / Moonshot / 智谱 …）驱动。
+**当前版本：`v1.0.0-rc1 (build 260913)`** —— 发布通道为 **rc（候选发布）**，功能已完整落地但稳定性仍在收敛，请勿用于重要场合。
 
-> 软件局限性与安全局限性：本软件仅供日常使用，不能用于重要场合；本软件由Deepseek V4-Pro生成，可能出现错误。
+> 说明与免责：本项目为参考实现，按「现状」提供，可能出现错误。本软件仅供日常使用，不能用于重要场合。
 
-## ✨ 功能特性
+## 🧭 架构
 
-### 浏览器核心（Chrome 大部分功能）
-- 多标签页浏览（新建 / 切换 / 关闭 / 拖拽排序）
-- 智能地址栏（Omnibox）：URL 与搜索自动识别、历史联想、安全状态标识
-- 前进 / 后退 / 刷新 / 主页、缩放、页内查找、全屏
-- 书签（星标收藏、书签栏、管理器）、历史记录、下载管理
-- 无痕（隐身）浏览窗口、新标签页（搜索框 + 快捷方式速拨）
-- 完整菜单与快捷键（Ctrl+T / W / L / F / D / R / +/- / 0 等）
-- 浅色 / 深色 / 跟随系统三套主题、毛玻璃（Acrylic）效果
+**v1.0.0-rc1 舍弃 Electron 运行时。** 浏览器主程序是**原生 C++ 可执行文件**，直接链接
+**CEF（Chromium Embedded Framework）**，也就是**真正的 Chromium 内核**（Chromium 150 / CEF 150），
+不再有「Electron 内嵌 Chromium」这一层中间商。
 
-### AI 助手与智能体
-- 内置对话侧边栏，流式输出
-- **AI 智能体**：可调用浏览器工具（控制网页、帮用户设置、抓包、读写页面等），4 档权限控制（关闭 / 日常 / 开发 / 全部）
-- 快捷功能：总结 / 翻译 / 润色 / 解释代码 / 生成笔记 / 写邮件
-- API Key 使用系统安全存储（`safeStorage`）加密落盘，绝不明文保存
+- **浏览器本体**：原生 C++ + CEF，多进程宿主（browser / renderer / gpu / utility / network），
+  renderer 沙箱开启；窗口、标签、地址栏、安全浏览、无痕、能效策略都在这一层。
+- **AI / 存储 / 自动化**：由一个**可选的 Node 边车进程**（`tib-service.exe`）承载，
+  通过 `127.0.0.1` 上的 HTTP + SSE（随机端口 + Bearer token）与浏览器通信。
+  边车是独立进程，可关闭；在「即开即用」能效档下不启动边车，此时 AI 能力降级并明确提示。
+- **UI**：React 18 + TypeScript 5 绘制的浏览器外壳（标签栏 / 地址栏 / 菜单 / 侧边栏），
+  **Apple 风格**，可切换 **TiBrowser / Edge / Chrome 三套皮肤**。
 
-### 本地安全服务
-- 钓鱼 / 恶意网址拦截：本地黑名单 + 启发式扫描（裸 IP、同形异义仿冒域名、可疑关键词）
-- HTTPS 自动升级、广告拦截、追踪器拦截、可疑下载拦截
-- 黑名单支持运行时扩展（`resources/blocklists/*.txt`）
+接口契约（`window.tib` 桥、RPC、安全档位、共享类型）以
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 为唯一事实来源。
 
-### 扩展与数据迁移
-- 扩展程序：开发者模式 + 本地加载 `.crx` / 已解压的扩展
-- 配置文件同步：一键导出 / 导入 `.tbuser` 文件，跨电脑迁移
+## ✨ 功能特性（v1.0.0-rc1 十五项）
+
+### 1. 完全 Chromium 内核
+浏览器主程序直接链接 CEF，运行真正的 Chromium 150 内核，多进程架构与 renderer 沙箱均来自 Chromium 本体。
+
+### 2. Edge / Chrome 全量能力 + UI 大更新
+对齐 Edge / Chrome 的日常浏览能力（多标签、Omnibox 地址栏联想、书签栏、历史、下载、页内查找、
+缩放、全屏、快捷键），并配套一次 UI 大更新。
+
+### 3. Microsoft / Google 账户登录与同步
+支持 Microsoft 与 Google 账户登录，并提供同步状态与手动同步入口
+（`tib.signIn(provider)` / `tib.getSyncState()` / `tib.syncNow()`）。
+> 需用户自备 OAuth client id；云端同步能力**尚不完整**，详见「已知限制」。
+
+### 4. 无痕模式 2.0 / 指纹可改
+无痕模式升级为**无痕++**：独立 `RequestContext` 不落盘，并支持**指纹改写**（User-Agent、
+平台、时区、语言、屏幕、Canvas/WebGL 等画像可调、可一键随机化），能力上接近指纹浏览器。
+
+### 5. 安全浏览三档
+| 档位 | 值 | 中文说明 |
+|---|---|---|
+| **增强型防护** | `enhanced` | 实时比对更多站点数据；对未知危险站点也警告（可忽略）；深度扫描可疑下载；登录后跨服务保护；发送混淆后的 URL 片段 + 少量页面内容 + 下载/扩展/系统信息样本。 |
+| **标准防护** | `standard` | 通过可隐藏 IP 的隐私服务器发送混淆 URL 片段；可疑时补发完整 URL 与少量页面内容；本地黑名单 + 启发式。 |
+| **不防护** | `none` | 不拦截；但仍保留「下载放行名单」提示（不阻断）。 |
+
+### 6. 不安全安装包可保留 + turtlelnc 内容自动放行
+可疑/不安全的下载不再被直接删除，用户可**选择保留**；同时对 turtlelnc 相关内容自动放行、防误杀
+（`github.com/turtlelnc/*`、`*.turtlelnc.*`、官网 `turtleweb.cc.cd` 及已签名发布物在任何档位下不拦截、不警告、不计入威胁统计）。
+
+### 7. 生成网页应用
+把任意网站一键安装为独立网页应用（`tib.installWebApp()`），可启动、可卸载，拥有独立窗口与应用列表。
+
+### 8. TiBrowser / Edge / Chrome 皮肤切换
+一套外壳三套皮肤，切换即生效（`tib.setSkin()`），布局与交互随皮肤调整。
+
+### 9. AI 连接支持 API / MCP / OAuth(SDK)
+AI 接入方式三种并存：**OpenAI 兼容 API**、**MCP 客户端**（工具/上下文扩展）、**OAuth(SDK) 登录**，
+用户可继续使用自备的 DeepSeek / OpenAI / 通义千问 / Moonshot / 智谱等服务。
+
+### 10. 整合各浏览器优点
+把 Chrome 的兼容与性能、Edge 的侧边栏与效率、以及国内浏览器的实用细节整合到同一外壳下。
+
+### 11. 一个浏览器解决所有事
+浏览、AI 对话与智能体、安全防护、办公与开发模式、网页应用、账户与同步，都在同一个浏览器内完成。
+
+### 12. AI 侧本地办公模式与本地开发模式
+- **本地办公模式（WorkBuddy 能力）**：文档整理、总结、写作、表格/邮件等日常办公任务。
+- **本地开发模式（Tare / codex 能力）**：代码读写、终端类任务、仓内改动等开发工作流。
+
+### 13. 能效四档
+| 档位 | 值 | 说明 |
+|---|---|---|
+| **标准** | `standard` | 默认档，性能与功耗平衡。 |
+| **快速** | `fast` | 优先响应速度，前台优先调度。 |
+| **低占用** | `low` | 降低后台与渲染开销，适合多标签长驻。 |
+| **即开即用** | `instant` | 预加载与快速启动优先（此档不启动 AI 边车，AI 能力降级并提示）。 |
+
+四档通过 `tib.setEnergyMode(m)` 切换，底层对应 `process-per-site` / 预加载 / 隐藏节流 / 即开即用策略。
+
+### 14. Apple 风格 UI 优化
+以 Apple 设计语言重做视觉与动效：留白、圆角、层级、过渡曲线，兼顾浅色 / 深色 / 跟随系统。
+
+### 15. 面向用户自有 AI 工具 / CLI / harness 的本地控制接口
+边车暴露本地自动化 API（`tib.automationInfo()` 返回 `baseUrl` 与一次性 `token`），
+供用户自己的 AI 工具、CLI、harness 驱动浏览器。
 
 ## 📥 下载与安装
 
@@ -45,101 +104,103 @@ TIbrowser 使用 **Electron（内嵌 Chromium 内核）+ React + TypeScript** �
 
 | 架构 | 安装包 | 适用 |
 |---|---|---|
-| **x64**（64 位） | [⬇️ 下载](release/TIbrowser-1.0.0-beta-x64-setup.exe) | 绝大多数电脑（推荐） |
-| **x86**（32 位） | [⬇️ 下载](release/TIbrowser-1.0.0-beta-ia32-setup.exe) | 老旧 32 位电脑 |
-| **ARM64** | [⬇️ 下载](release/TIbrowser-1.0.0-beta-arm64-setup.exe) | 骁龙等 ARM 笔记本 |
+| **x64**（64 位） | `TIbrowser-1.0.0-rc1-x64-setup.exe` | 绝大多数电脑（推荐） |
+| **x86**（32 位） | `TIbrowser-1.0.0-rc1-ia32-setup.exe` | 老旧 32 位电脑 |
+| **ARM64** | `TIbrowser-1.0.0-rc1-arm64-setup.exe` | 骁龙等 ARM 笔记本 |
 
 1. 下载对应架构的安装包，双击运行，按向导完成安装
 2. 从桌面或开始菜单启动 **TIbrowser**
 
-> 首次运行 Windows SmartScreen 可能提示「未知发布者」，点击「更多信息 → 仍要运行」即可（本安装包未做代码签名）。
+> 首次运行 Windows SmartScreen 可能提示「未知发布者」，点击「更多信息 → 仍要运行」即可（本安装包**未做代码签名**）。
 
 ### Linux / macOS
 
-Linux（AppImage）与 macOS（dmg）版本**需在对应系统上构建**——Windows 上交叉打包 AppImage 受符号链接权限限制、macOS 无法交叉打包。打包配置已就绪，在 Linux / macOS 机器或 CI 上执行：
+Linux（AppImage）与 macOS（dmg）产物**需在对应系统或 CI 上构建**，无法在 Windows 上交叉打包。
 
-```bash
-npx electron-builder --linux   # Linux AppImage（x64 / arm64）
-npx electron-builder --mac     # macOS dmg / zip（x64 / arm64）
-```
+> **从 v0.1.0 / 1.0.0-beta 升级**：内核与数据目录均已更换，**旧配置不会自动迁移**，详见
+> [`release/README.md`](release/README.md) 的「升级说明」。
 
-## 🚀 使用指南
-
-### 配置 AI 助手
-
-1. 打开右上角「⋮」菜单 → **设置**，或点击侧边栏的齿轮
-2. 在「AI 助手」中填入你的服务商信息：
-   - **DeepSeek**：API 地址 `https://api.deepseek.com/v1`，模型 `deepseek-chat`
-   - **OpenAI**：API 地址 `https://api.openai.com/v1`，模型 `gpt-4o-mini`
-3. 填入 API Key，点击「保存设置」
-
-### 使用 AI 智能体
-
-在 AI 侧边栏顶部的「控制权限」中选择档位：
-- **关闭**：仅普通对话
-- **日常**：可控制网页、帮你设置等安全操作
-- **开发**：额外增加抓包、执行 JS、读源码等开发功能
-- **全部**：完全控制浏览器（含清空数据等危险操作，请谨慎开启）
-
-### 安装扩展
-
-设置 → 扩展程序 → 开启「开发者模式」→ 加载 `.crx` 或已解压的扩展。
-
-## 🛠️ 本地开发
+## 🛠️ 从源码构建
 
 ### 前置要求
-- **Node.js ≥ 20**
-- Windows 10/11（毛玻璃效果需 Windows 11）
 
-### 开始
+| 依赖 | 版本 |
+|---|---|
+| **Node.js** | ≥ 20（构建边车与 UI） |
+| **CMake** | ≥ 3.21 |
+| **Ninja** | 任意近期版本 |
+| **MSVC** | Visual Studio 2022 / 2026 Build Tools（含 C++ 桌面工作负载） |
+| **Windows SDK** | 随 Build Tools 安装 |
+
+### 构建步骤
+
 ```bash
-git clone git@github.com:turtlelnc/Turtle.AI-Browser.git
-cd Turtle.AI-Browser
-npm install
-npm run dev          # 开发模式（热更新）
+# 0) 拉取 CEF 内核（来自 cef-builds.spotifycdn.com，体积较大，只需一次）
+npm run fetch:cef
+
+# 1) 构建 React 外壳 UI
+npm run ui:build
+
+# 2) 构建 Node 边车服务
+npm run service:build
+
+# 3) 配置并编译原生浏览器（C++ / CEF）
+npm run native:configure
+npm run native:build
+
+# 4) 运行
+npm run native:run
 ```
 
-### 构建与打包
-```bash
-npm run typecheck    # 类型检查
-npm run build        # 编译
-npm run build:win    # 打包 Windows x64/x86/ARM64 → release/*.exe
-npm run build:dir    # 免安装目录 → release/win-unpacked/
-```
+其他可用脚本：`npm run ui:dev`（UI 热更新开发）、`npm run service:test`（边车自检）。
 
-> **国内网络加速**：Electron 二进制默认从 GitHub 下载，国内可能很慢，可先设置镜像：
+> **镜像提示**：`ELECTRON_MIRROR` 那一套镜像配置**已经不再需要**——rc1 的浏览器主程序不依赖
+> Electron，内核由 `scripts/fetch-cef.mjs` 从 `cef-builds.spotifycdn.com` 获取。
+> 但如果你在国内，`npm install` 仍建议配置 npm 镜像以加速依赖下载：
 > ```bash
-> export ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/"
-> export ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
+> npm config set registry https://registry.npmmirror.com
 > ```
 
 ## 📁 目录结构
 
+与 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §2 的契约一致：
+
 ```
 Turtle.AI-Browser/
-├── src/                        # 源代码
-│   ├── main/                   # Electron 主进程（窗口/标签页/安全/AI/存储）
-│   ├── preload/                # 预加载脚本（contextBridge 桥接）
-│   ├── renderer/               # React 渲染进程（UI）
-│   └── shared/                 # 跨进程共享的类型与常量
-├── resources/blocklists/       # 可扩展的本地黑名单
-├── build/                      # 打包资源（图标）
-├── release/                    # 构建产物（安装包等）
-├── electron.vite.config.ts
-├── electron-builder.yml
-└── package.json
+├── native/                 # C++ 原生浏览器（CEF）：窗口/标签/tib:// 协议/安全/无痕/能效/边车通信
+│   ├── CMakeLists.txt
+│   ├── include/
+│   └── src/
+├── service/                # Node 边车：AI（API/MCP/OAuth）、存储、办公/开发模式、自动化 API
+│   └── src/
+├── src/
+│   ├── shared/             # 三方共享类型与常量（唯一契约）
+│   ├── renderer/           # React 浏览器外壳 UI（tib://ui）
+│   └── legacy-electron/    # v0.1.0 的 Electron 实现，仅作只读参考
+├── resources/              # 黑名单、图标、内置页面
+├── docs/                   # 架构与接口文档
+├── scripts/                # 构建 / 取内核 / 打包脚本
+└── release/                # 最终用户使用的部分（安装包）
 ```
 
-## 🛠️ 技术栈
+> ⚠️ `src/legacy-electron/` 存放 **已退役的 v0.1.0 Electron 实现，仅供查阅参考**，
+> 不参与 rc1 的构建，也不要在此基础上改功能。
 
-Electron 33 · React 18 · TypeScript 5 · electron-vite 2 · electron-builder 25
+## ⚠️ 已知限制
 
-## ⚠️ 说明与限制
+以下限制是**已知且未完全解决**的，请据此判断是否适合你的场景：
 
-- **不包含 Google 账号同步与 Chrome 扩展商店**。
-- Electron 对 Chrome 扩展 API 支持有限，只有内容脚本/后台脚本类扩展能较完整运行。
-- 内置黑名单为演示样例，正式使用请接入真实、及时更新的威胁情报源。
-- 安装包未做代码签名，正式分发建议配置签名证书。
+- **通道为 rc**：功能完整但稳定性仍在收敛，**可能崩溃**，请勿用于重要场合，注意备份数据。
+- **本地黑名单仅为样例**：未接入真实、及时更新的威胁情报源，防护效果有限。
+- **增强型防护部分能力本地不可用**：其中依赖 Google 云端的能力（如实时站点比对、登录后跨服务保护）
+  在本实现中不可用，**界面会明确标注**，不会假装生效。
+- **账户同步不完整**：登录与同步需要用户**自备 OAuth client id**；云端同步能力**尚不完整**。
+- **扩展兼容性受限**：受 Chromium 嵌入方案限制，只有部分类型的扩展能较完整运行
+  （内容脚本 / 后台脚本类较完整；依赖 Chrome 私有 API 的扩展可能异常）。
+- **安装包未做代码签名**：SmartScreen 会提示「未知发布者」，正式分发建议配置签名证书。
+- **Linux / macOS 产物需在对应系统或 CI 上构建**，Windows 上无法交叉打包。
+- **性能与兼容数据未做基准测试**：本项目不提供、也未发布任何跑分或兼容性基准数字，
+  请以你自己的实际体验为准。
 
 ## 📄 许可证
 

@@ -1,0 +1,71 @@
+/* ============================================================================
+ * Edge 风格皮肤（布局致敬，非复制）
+ * ----------------------------------------------------------------------------
+ * 【原创声明 / honesty note】
+ * 这是 TiBrowser **自己绘制**的一套外观：用 CSS 令牌调出「柔和圆角 + 略高密度 +
+ * 蓝色强调色」的排布气质，仅作布局致敬。本文件不含任何 Microsoft / Microsoft Edge
+ * 的专有资源、商标、图标或字体；其中的图标全部是我们在 components/icons.tsx 里
+ * 手写的内联 SVG。产品名的出现只为向用户说明「看起来像哪种布局」。
+ * ==========================================================================*/
+
+:root[data-skin='edge'] {
+  /* ---- 品牌与强调色：柔和蓝 ---- */
+  --tb-accent: #0f6cbd;
+  --tb-accent-hover: #115ea3;
+  --tb-accent-soft: rgba(15, 108, 189, 0.14);
+  --tb-accent-ai: #6b4ee6;
+  --tb-focus-ring: 0 0 0 2px rgba(15, 108, 189, 0.28);
+
+  /* ---- 形状：小圆角、矩形感更强 ---- */
+  --tb-tab-radius: 7px;
+  --tb-tab-radius-active: 7px;
+  --tb-tab-h: 34px;
+  --tb-tab-outer-h: 40px;
+  --tb-tab-gap: 4px;
+  --tb-tab-strip-pad: 6px 10px;
+  --tb-tab-max-w: 240px;
+  --tb-tab-font-size: 12.5px;
+  --tb-toolbar-h: 44px;
+  --tb-toolbar-pad: 0 10px;
+  --tb-bookmark-h: 32px;
+  --tb-omnibox-h: 32px;
+  --tb-omnibox-radius: 6px;
+  --tb-pill-radius: 6px;
+  --tb-btn-radius: 6px;
+  --tb-card-radius: 8px;
+  --tb-card-radius-lg: 12px;
+  --tb-section-gap: 24px;
+
+  /* ---- 图标语义：更细的描边、更小的导航按钮 ---- */
+  --tb-icon-stroke: 1.7;
+  --tb-icon-tab: 15px;
+  --tb-icon-nav: 17px;
+  --tb-nav-btn-size: 32px;
+  --tb-tab-close-size: 16px;
+
+  /* ---- 动效：短促、克制 ---- */
+  --tb-tab-transition: 160ms cubic-bezier(0.33, 0, 0.67, 1);
+  --tb-tab-hover-lift: 0px;
+  --tb-newtab-radius: 12px;
+  --tb-tab-close-on-active: 1;
+}
+
+/* Edge 风格：激活标签为实心卡片，非激活标签仅悬停时着色 */
+:root[data-skin='edge'] .tab.active {
+  background: var(--tb-tab-active);
+  box-shadow: none;
+  transform: none;
+}
+:root[data-skin='edge'] .tab:not(.active) {
+  background: transparent;
+}
+:root[data-skin='edge'] .tab:not(.active):hover {
+  background: var(--tb-hover);
+}
+/* Edge 风格工具栏图标之间更紧凑 */
+:root[data-skin='edge'] .toolbar {
+  gap: 2px;
+}
+:root[data-skin='edge'] .nav-btn {
+  border-radius: var(--tb-btn-radius);
+}

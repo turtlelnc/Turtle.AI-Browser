@@ -1,8 +1,13 @@
 import type { CliPermissionLevel, Settings, SearchEngineId } from './types'
 
 /** 产品信息 */
-export const APP_NAME = 'TIbrowser'
-export const APP_VERSION = '1.0.0-beta'
+export const APP_NAME = 'TiBrowser'
+/** 语义版本：v1.0.0-rc1 */
+export const APP_VERSION = '1.0.0-rc1'
+/** 构建号：260913（日期码） */
+export const APP_BUILD = '260913'
+/** 展示用完整版本串 */
+export const APP_VERSION_FULL = `v${APP_VERSION} (build ${APP_BUILD})`
 
 /** 内部伪协议 / 页面标识 */
 export const NEW_TAB_URL = 'tibrowser://newtab'

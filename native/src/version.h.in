@@ -1,0 +1,8 @@
+// 由 CMake configure_file 生成，勿手工修改
+#pragma once
+
+#define TIB_VERSION "@TIB_VERSION@"
+#define TIB_BUILD "@TIB_BUILD@"
+#define TIB_VERSION_FULL "v" TIB_VERSION " (build " TIB_BUILD ")"
+#define TIB_PRODUCT_NAME "TiBrowser"
+#define TIB_COPYRIGHT "Copyright \xC2\xA9 2026 TiBrowser"

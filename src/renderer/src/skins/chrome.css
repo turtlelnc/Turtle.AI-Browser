@@ -1,0 +1,83 @@
+/* ============================================================================
+ * Chrome 风格皮肤（布局致敬，非复制）
+ * ----------------------------------------------------------------------------
+ * 【原创声明 / honesty note】
+ * 这是 TiBrowser **自己绘制**的一套外观：用 CSS 令牌调出「梯形感标签 + 高密度 +
+ * 中性灰」的排布气质，仅作布局致敬。本文件不含任何 Google / Google Chrome 的
+ * 专有资源、商标、图标或字体；图标全部是我们在 components/icons.tsx 手写的内联 SVG。
+ * 产品名的出现只为向用户说明「看起来像哪种布局」。
+ * ==========================================================================*/
+
+:root[data-skin='chrome'] {
+  /* ---- 品牌与强调色：中性蓝 ---- */
+  --tb-accent: #1b6ef3;
+  --tb-accent-hover: #1a5fd0;
+  --tb-accent-soft: rgba(27, 110, 243, 0.13);
+  --tb-accent-ai: #7a5af8;
+  --tb-focus-ring: 0 0 0 2px rgba(27, 110, 243, 0.3);
+
+  /* ---- 形状：上圆下方的「梯形感」标签，最紧凑 ---- */
+  --tb-tab-radius: 4px;
+  --tb-tab-radius-active: 10px;
+  --tb-tab-h: 32px;
+  --tb-tab-outer-h: 38px;
+  --tb-tab-gap: 2px;
+  --tb-tab-strip-pad: 5px 8px;
+  --tb-tab-max-w: 220px;
+  --tb-tab-font-size: 12px;
+  --tb-toolbar-h: 42px;
+  --tb-toolbar-pad: 0 8px;
+  --tb-bookmark-h: 30px;
+  --tb-omnibox-h: 30px;
+  --tb-omnibox-radius: 8px;
+  --tb-pill-radius: 8px;
+  --tb-btn-radius: 6px;
+  --tb-card-radius: 8px;
+  --tb-card-radius-lg: 12px;
+  --tb-section-gap: 22px;
+
+  /* ---- 图标语义：细描边、小尺寸，贴近紧凑布局 ---- */
+  --tb-icon-stroke: 1.6;
+  --tb-icon-tab: 14px;
+  --tb-icon-nav: 17px;
+  --tb-nav-btn-size: 30px;
+  --tb-tab-close-size: 15px;
+
+  /* ---- 动效：最快 ---- */
+  --tb-tab-transition: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --tb-tab-hover-lift: 0px;
+  --tb-newtab-radius: 10px;
+  --tb-tab-close-on-active: 0;
+
+  /* 标签栏与工具栏同底色，形成连续的「一条」 */
+  --tb-chrome-bg: var(--tb-chrome-bg-solid);
+  --tb-chrome-blur: none;
+}
+
+/* 梯形感：激活标签上圆角大、下圆角小，并且向下「接」住工具栏 */
+:root[data-skin='chrome'] .tab {
+  border-radius: var(--tb-tab-radius-active) var(--tb-tab-radius-active) 4px 4px;
+  align-self: flex-end;
+  margin-bottom: 0;
+}
+:root[data-skin='chrome'] .tab.active {
+  background: var(--tb-tab-active);
+  box-shadow: none;
+  transform: none;
+}
+:root[data-skin='chrome'] .tab:not(.active):hover {
+  background: var(--tb-hover);
+}
+/* Chrome 风格的非激活标签默认不显示关闭按钮（鼠标悬停才出现） */
+:root[data-skin='chrome'] .tab .tab-close {
+  opacity: 0;
+}
+:root[data-skin='chrome'] .tab:hover .tab-close {
+  opacity: 1;
+}
+:root[data-skin='chrome'] .nav-btn {
+  border-radius: var(--tb-btn-radius);
+}
+:root[data-skin='chrome'] .omnibox {
+  background: var(--tb-surface-2);
+}
