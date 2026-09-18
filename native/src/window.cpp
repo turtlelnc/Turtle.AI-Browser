@@ -42,16 +42,58 @@ CefRefPtr<CefValue> AsValue(CefRefPtr<CefListValue> list) {
 /** 颜色：深浅两套主题的窗口底色 */
 constexpr uint32_t kBgColor = 0xFF1C1C1E;
 
+// ---------------------------------------------------------------- 诊断开关
+// 保留一个可复现历史崩溃的开关，便于日后回归验证：
+//   --tib-legacy-detach=create|activate|both
+//     用已被修复的旧行为（RemoveChildView + AddChildView）切换标签。
+//     默认关闭；开启后进程会在数秒内以 0xC0000005 崩溃（崩溃点 libcef+0x43208B0），
+//     这正是 0.9~14 秒随机崩溃那次的根因，见 CreateTab 里的详细说明。
+std::string ExperimentSwitch(const char* name) {
+  CefRefPtr<CefCommandLine> cl = CefCommandLine::GetGlobalCommandLine();
+  if (!cl || !cl->HasSwitch(name)) return "";
+  return cl->GetSwitchValue(name).ToString();
+}
+
+bool LegacyDetach(const char* which) {
+  const std::string mode = ExperimentSwitch("tib-legacy-detach");
+  return mode == which || mode == "both";
+}
+
 /** 上线调用前缀：必须与 src/bootstrap/index.ts 的 CALL_PREFIX 一致 */
 constexpr char kHostCallPrefix[] = "__TIB_CALL__";
 
 /**
+ * 【诊断开关】--tib-close-after=<毫秒>：到点后走正常关窗路径（TibWindow::Close），
+ * 让"关闭窗口"这条路径可以被自动化验证（本机实测给窗口发 WM_CLOSE 不会让进程退出，
+ * 必须走这条路径）。默认关闭。
+ */
+class CloseWindowTask : public CefTask {
+ public:
+  explicit CloseWindowTask(CefRefPtr<TibWindow> window) : window_(std::move(window)) {}
+  void Execute() override {
+    if (window_) window_->Close();
+  }
+
+ private:
+  CefRefPtr<TibWindow> window_;
+  IMPLEMENT_REFCOUNTING(CloseWindowTask);
+};
+
+/**
  * 单次外壳状态采样任务。
  * 放在匿名命名空间内，避免污染 tib 命名空间；实现见文件末尾。
+ *
+ * 必须用 CefRefPtr 持有窗口，不能存裸 TibWindow*：
+ * 窗口的唯一保活引用是 window.cpp 里的 Windows() 全局表，而 OnWindowDestroyed 会把
+ * 自己从表里摘掉 —— 这时若有尚未执行的延迟任务，裸指针就会悬空。
+ * 实测：关窗时若还有诊断探针没跑完（约 8 秒关窗，探针还剩 2 个），
+ * 进程会在探针触发时 0xC0000005 崩溃，崩溃点就在 TiBrowser.exe 自己的代码里
+ * （访问违例读 0xFFFFFFFFFFFFFFFF），与 libcef 无关。
  */
 class UiProbeTask : public CefTask {
  public:
-  UiProbeTask(TibWindow* window, int round) : window_(window), round_(round) {}
+  UiProbeTask(CefRefPtr<TibWindow> window, int round)
+      : window_(std::move(window)), round_(round) {}
   void Execute() override {
     if (!window_) return;
     window_->RunInChrome(kUiProbeScript);
@@ -98,7 +140,7 @@ class UiProbeTask : public CefTask {
 })();
 )JS";
 
-  TibWindow* window_;
+  CefRefPtr<TibWindow> window_;
   int round_;
   IMPLEMENT_REFCOUNTING(UiProbeTask);
 };
@@ -112,6 +154,8 @@ struct TibWindow::Tab {
   CefRefPtr<PageClient> client;
   /** 待打开的地址：浏览器就绪后由 OnTabCreated 执行 */
   std::string pending_url;
+  /** 是否已经发起过首次导航（该回调会触发两次，避免重复导航） */
+  bool navigated = false;
 };
 
 // ---------------------------------------------------------------- 标签页
@@ -160,28 +204,71 @@ std::string TibWindow::CreateTab(const std::string& input, bool activate) {
 
   CefBrowserSettings browser_settings;
   browser_settings.background_color = kBgColor;
-  // 注意：CefBrowserView::CreateBrowserView 返回的是**新创建**的引用；
-  // 直接赋给 CefRefPtr 会触发 "Check failed: !needs_adopt_ref_" 断言，
-  // 必须先取出裸指针，让 CefRefPtr 走 adopt 语义。
+  // 引用计数：CreateBrowserView 返回的 CefRefPtr 已经持有**唯一**一份引用
+  // （实测：取出裸指针后 HasOneRef() 为真）。
+  //
+  // 旧写法 `CefBrowserView* raw = CreateBrowserView(...).release(); tab->view = raw;`
+  // 是错的：release() 只是把那份引用交给了一个不会被释放的裸指针，随后
+  // `tab->view = raw` 又 AddRef 一次，于是引用计数变成 2 而只有一个持有者 ——
+  // 每建一个视图就泄漏一份引用，视图与其内部的 CefBrowser 永远不会被销毁。
+  // 实测日志（排查时用一个临时开关打印 HasOneRef）：release 后 HasOneRef=是；
+  // 赋给 tab->view 后 HasOneRef=否 —— 即多出一份无人持有的引用。
+  //
+  // 现在改为把工厂返回的 CefRefPtr 直接**移动**给 tab->view：全程只有一份引用，
+  // 既不会多出一次 AddRef（因此也不会触发 needs_adopt_ref_ 断言），也不会泄漏。
   // 委托必须是 PageViewDelegate（声明 Alloy 风格），否则视图会被窗口拒绝挂载。
   // 初始 URL 用 about:blank：tib:// 的 scheme handler 此刻尚未装好，直接给会报
   // ERR_UNKNOWN_URL_SCHEME（新标签页的真实入口在 OnTabCreated 里加载）。
-  CefBrowserView* raw_view =
+  CefRefPtr<CefBrowserView> created =
       CefBrowserView::CreateBrowserView(client, "about:blank", browser_settings, nullptr, context,
-                                        new PageViewDelegate(this, id))
-          .release();
+                                        new PageViewDelegate(this, id));
   Log("CreateTab: BrowserView 已创建");
-  tab->view = raw_view;
+  tab->view = std::move(created);
+  CefBrowserView* raw_view = tab->view.get();
+  // 引用计数自检：此刻这个视图应当只有 tab->view 一份引用。
+  // 若不为 1，说明创建路径上又有人多持了一份引用（历史上 `.release()` + 裸指针赋值
+  // 就是这样多出一份，导致视图与其 CefBrowser 永不销毁）。只在异常时打日志。
+  if (tab->view && !tab->view->HasOneRef()) {
+    Log("CreateTab: 警告 —— 新建视图的引用计数不为 1，可能存在引用泄漏");
+  }
 
+  // 【崩溃修复】标签切换只切可见性，**绝不**把已挂载的 BrowserView 从窗口上摘下来。
+  //
+  // 根因（Windows / CEF 150.0.20 / Alloy 风格，有崩溃调用栈与对照实验为证）：
+  //   `--open=` 的附加标签页是在 `OnWindowCreated` 里创建的，而 `OnWindowCreated`
+  //   是在 `CefWindow::CreateTopLevelWindow` **内部同步**调用的 —— 也就是说窗口自身
+  //   还在创建过程中。此时旧实现调用 `window_->RemoveChildView(content_view_)` 把
+  //   上一个已挂载的 BrowserView 摘下来，会破坏 CEF 内部的视图/窗口状态；随后某个
+  //   UI 线程任务对已被销毁（或为空）的对象做虚调用，进程以 0xC0000005 崩溃，
+  //   崩溃点恒定在 libcef+0x43208B0（访问违例：读取 0x00000000000000F0，this=null），
+  //   调用栈固定为 CefRunMessageLoop → UI 线程任务。
+  //
+  // 对照实验（同一份二进制，用 --tib-legacy-detach 切换新旧行为）：
+  //   * 旧行为 + 立即创建第二个标签页（在 OnWindowCreated 内摘视图）→ 每次都崩，
+  //     1~14 秒内必现（多次复现，崩溃处理器每次都落下一段新的调用栈）；
+  //   * 旧行为 + 把第二个标签页延后 150ms / 250ms / 800ms / 4000ms 创建
+  //     （即窗口创建完成之后再摘视图）→ 4/4 全部存活 ≥20s；
+  //   * 只切可见性、完全不摘视图 → 1/2/3 标签页各 60 秒、快捷键切换 45 秒全部存活；
+  //   * 在同一时机只做 AddChildView（挂新视图）是安全的 —— 修复后的版本正是在
+  //     OnWindowCreated 内挂载视图并稳定运行，因此肇事者是"摘除"而不是"挂载"。
+  // 结论：问题不在"摘视图"这个动作本身（CEF 官方 ceftests 里就测过摘除/再挂载），
+  // 而在"窗口还在 CreateTopLevelWindow 里就摘视图"这个时机。
+  // 规避手段就是本文件现在的做法：标签切换只切可见性，视图一旦挂上就不再摘除。
+  // 诚实标注：这是规避而非根治 —— 根治要么等 CEF 修掉该时序问题，要么把窗口创建
+  // 与标签创建彻底分开（把 --open=/快捷键自检的标签页改为窗口创建完成后再建）。
   if (!active_id_.empty() && content_view_) {
     content_view_->SetVisible(false);
   }
-  if (!active_id_.empty()) {
+  // 【诊断开关】--tib-legacy-detach=create 可复现历史崩溃：按旧行为摘除旧视图。
+  // 仅用于排查/回归验证，默认关闭；开启后进程会在数秒内按设计崩溃。
+  if (!active_id_.empty() && content_view_ && LegacyDetach("create")) {
+    Log("诊断：按旧行为调用 RemoveChildView(旧视图)（--tib-legacy-detach=create）");
     window_->RemoveChildView(content_view_);
   }
 
   active_id_ = id;
   content_view_ = raw_view;
+  // 首次挂载：新视图只有挂到窗口上，底层 CefBrowser 才会被创建。
   window_->AddChildView(content_view_);
   Layout();
   Log("CreateTab: 已加入标签列表并完成布局");
@@ -237,12 +324,26 @@ void TibWindow::ActivateTab(const std::string& tab_id) {
   const auto it = std::find_if(tabs_.begin(), tabs_.end(),
                                [&](const std::shared_ptr<Tab>& t) { return t->id == tab_id; });
   if (it == tabs_.end() || !window_) return;
+  // 【崩溃修复】与 CreateTab 同理：切换标签只切可见性，不摘视图。
+  // 在窗口还在创建过程中（快捷键自检会在 OnWindowCreated 里同步切标签）摘视图，
+  // 会让进程在 1 秒内以 0xC0000005 崩溃（实测，崩溃点 libcef+0x43208B0）。
   if (content_view_ && content_view_ != (*it)->view) {
-    window_->RemoveChildView(content_view_);
+    content_view_->SetVisible(false);
+    // 【诊断开关】--tib-legacy-detach=activate 可复现历史崩溃：按旧行为摘除旧视图
+    if (LegacyDetach("activate")) {
+      Log("诊断：ActivateTab 按旧行为调用 RemoveChildView(旧视图)（--tib-legacy-detach=activate）");
+      window_->RemoveChildView(content_view_);
+    }
   }
   active_id_ = tab_id;
   content_view_ = (*it)->view;
-  window_->AddChildView(content_view_);
+  if (LegacyDetach("activate")) {
+    // 【诊断开关】旧行为：重新挂载要激活的视图
+    window_->AddChildView(content_view_);
+  } else if (content_view_) {
+    // 视图在 CreateTab 里已经挂到窗口上，这里只需要让它可见（Layout 会补上边界）。
+    content_view_->SetVisible(true);
+  }
   Layout();
   CefRefPtr<CefBrowser> browser = active_page();
   if (browser) browser->GetHost()->SetFocus(true);
@@ -658,19 +759,24 @@ std::string TibWindow::GetStateJson() {
   root->SetBool("canGoForward", active ? active->can_go_forward : false);
   root->SetBool("isLoading", active ? active->loading : false);
 
-  // 设置快照：字段与 src/shared/bridge.ts 的 TibSettings 对齐
+  // 设置快照：字段与 src/shared/bridge.ts 的 TibSettings 对齐。
+  //
+  // 必须读 NativeStore 的真实设置，不能写死默认值 —— 否则每次状态推送都会用
+  // 默认值覆盖 UI 从 getSettings() 拿到的真实设置，表现为"改了设置但没生效"
+  // （皮肤/主题/书签栏开关都会中招）。
+  const AppSettings& s = NativeStore::Get().settings;
   CefRefPtr<CefDictionaryValue> settings = CefDictionaryValue::Create();
-  settings->SetString("searchEngine", "bing");
-  settings->SetString("homepage", "https://www.bing.com");
-  settings->SetString("theme", "system");
-  settings->SetString("skin", AppContext::Get().skin());
-  settings->SetString("perf", "high");
-  settings->SetBool("bookmarkBarVisible", true);
-  settings->SetBool("showHomeButton", true);
-  settings->SetBool("restoreSession", false);
-  settings->SetString("cliPermission", "daily");
-  settings->SetBool("aiEnabled", true);
-  settings->SetBool("serviceAutoStart", true);
+  settings->SetString("searchEngine", s.search_engine);
+  settings->SetString("homepage", s.homepage);
+  settings->SetString("theme", s.theme);
+  settings->SetString("skin", s.skin.empty() ? AppContext::Get().skin() : s.skin);
+  settings->SetString("perf", s.perf);
+  settings->SetBool("bookmarkBarVisible", s.bookmark_bar_visible);
+  settings->SetBool("showHomeButton", s.show_home_button);
+  settings->SetBool("restoreSession", s.restore_session);
+  settings->SetString("cliPermission", s.cli_permission);
+  settings->SetBool("aiEnabled", s.ai_enabled);
+  settings->SetBool("serviceAutoStart", s.service_auto_start);
   root->SetValue("settings", AsValue(settings));
 
   return ToJson(AsValue(root));
@@ -720,16 +826,20 @@ void TibWindow::StartUiDiagnostics(int times, int interval_ms) {
  * （GetWindowRect 为 -21333,-21333 且 IsIconic 为真），仅调用 Show() 不足以解除，
  * 桌面与截图工具都看不到它。这里在窗口创建后延迟再强制走一遍
  * 居中 → Restore → Show → Activate，并把最终状态写进日志便于确认。
+ *
+ * 同样必须用 CefRefPtr 持有窗口：延迟任务可能在窗口已经销毁之后才执行
+ * （窗口的唯一保活引用是 Windows() 全局表，OnWindowDestroyed 会把自己摘掉），
+ * 裸指针此时就是悬空指针，见 UiProbeTask 上的说明。
  */
 class WindowActivateTask : public CefTask {
  public:
-  explicit WindowActivateTask(TibWindow* window) : window_(window) {}
+  explicit WindowActivateTask(CefRefPtr<TibWindow> window) : window_(std::move(window)) {}
   void Execute() override {
     if (window_) window_->EnsureVisibleOnScreen();
   }
 
  private:
-  TibWindow* window_;
+  CefRefPtr<TibWindow> window_;
   IMPLEMENT_REFCOUNTING(WindowActivateTask);
 };
 
@@ -855,8 +965,13 @@ void TibWindow::OnTabCreated(const std::string& tab_id, CefRefPtr<CefBrowser> br
                                [&](const std::shared_ptr<Tab>& t) { return t->id == tab_id; });
   if (it == tabs_.end()) return;
   (void)client;
-  Log("OnTabCreated: 网页视图就绪 id=" + tab_id + " 视图已挂载=" +
-      (((*it)->view != nullptr) ? "是" : "否"));
+  // 这个回调会被**两次**触发：PageClient::OnAfterCreated 与
+  // PageViewDelegate::OnBrowserCreated 都会走到这里。
+  // 必须只让第一次真正发起导航，否则第二次会用 NewTabUrl() 覆盖掉首次导航 ——
+  // 表现为"用 --url= 打开的页面被新标签页顶掉"，多标签启动时尤其明显。
+  if ((*it)->navigated) return;
+  (*it)->navigated = true;
+
   if (!browser || !browser->GetMainFrame()) return;
   const std::string url =
       (*it)->pending_url.empty() ? NewTabUrl() : (*it)->pending_url;
@@ -895,22 +1010,24 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   chrome_settings.background_color = kBgColor;
   chrome_client_ = new ChromeClient(this);
   Log("OnWindowCreated: ChromeClient 就绪");
-  // 同上：新建引用必须取出裸指针再交给 CefRefPtr（adopt 语义）
+  // 引用计数：与 CreateTab 同理，把工厂返回的 CefRefPtr 直接移动过来，
+  // 全程只有一份引用（旧写法 `.release()` + 裸指针赋值会白白多出一份没人释放的引用）。
   //
   // 外壳 UI 走本地回环 HTTP：本机实测 tib:// 在 CefBrowserView 中始终返回
   // ERR_UNKNOWN_URL_SCHEME（详见 native/include/local_server.h）。
-  // 初始 URL 用 about:blank，真正的入口在下面显式 LoadURL ——
-  // CreateBrowserView 内部会立刻发起加载，那时上下文未必就绪。
-  CefBrowserView* raw_chrome =
+  //
+  // 初始 URL 用 about:blank，真正的入口由 ChromeViewDelegate → LoadChromeUi() 发起。
+  // 之所以不能在这里 LoadURL：CreateBrowserView 会**先**排入 about:blank 的导航，
+  // 紧接着发起的 tib://ui 加载会在稍后被这个 about:blank 覆盖回去 ——
+  // 实测日志表现为「LoadChromeUi: 加载外壳 UI …」之后又出现
+  // 「外壳 UI 开始加载：about:blank / 加载完成：about:blank」，最终页面是空白。
+  // 因此外壳 UI 的加载必须发生在 CreateBrowserView 返回、视图挂载完成之后。
+  CefRefPtr<CefBrowserView> created_chrome =
       CefBrowserView::CreateBrowserView(chrome_client_, "about:blank", chrome_settings, nullptr,
-                                        nullptr, new ChromeViewDelegate(this))
-          .release();
-  chrome_view_ = raw_chrome;
+                                        nullptr, new ChromeViewDelegate(this));
+  chrome_view_ = std::move(created_chrome);
   window->AddChildView(chrome_view_);
   Log("OnWindowCreated: 外壳 UI 视图已挂载");
-
-  // 外壳 UI 的加载由 ChromeViewDelegate::OnBrowserCreated → OnChromeViewReady 负责，
-  // 这里不再重复 LoadURL（重复加载会让 frame 变成 detached）。
   window->Show();
   window->Activate();
   // 本机实测：CEF 首次创建 Alloy 窗口时会落到"最小化"状态（IsWindowVisible 为真但
@@ -968,6 +1085,11 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
     // 说明：本机实测 CefPostDelayedTask 在这个外壳里会把进程带崩
     // （同一份代码去掉延迟任务后稳定存活 36 秒以上），因此不再用延迟任务做自检。
     // 改为直接验证恢复逻辑本身：手动放一条"已关闭地址"进栈再恢复。
+    //
+    // 更正（2026-09-18，查 0xC0000005 崩溃时追加）：上面的判断是误判。
+    // 真正的崩溃源是"在窗口创建过程中摘除 BrowserView"（见 CreateTab 的根因说明），
+    // 与延迟任务无关 —— StartUiDiagnostics 的 CefPostDelayedTask 探针每 2 秒跑一次，
+    // 修复后连续 60 秒正常执行且进程稳定存活。这里保留原记录，避免下次再绕远路。
     closed_tabs_.push_back("https://example.com/");
     const size_t before_restore = tabs_.size();
     const bool restored = ReopenClosedTab();
@@ -977,6 +1099,11 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   }
 
   // --open=<url> 指定的附加标签页（自动化验证用）
+  //
+  // 注意：这里是**在 OnWindowCreated 内部**创建标签页，也就是窗口还在
+  // CefWindow::CreateTopLevelWindow 里。此前正是这个时机配合"摘除旧视图"导致了
+  // 0xC0000005 崩溃（详见 CreateTab 里的根因说明）；现在切换标签不再摘视图，
+  // 因此这里是安全的。若将来要恢复"摘视图"式切换，必须把这里改成窗口创建完成后再建。
   for (const std::string& extra : AppContext::Get().extra_urls()) {
     Log("按命令行要求打开附加标签页：" + extra);
     CreateTab(extra, true);
@@ -985,7 +1112,17 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   Layout();
   Log("OnWindowCreated: 布局完成");
 
-  // 视图已挂载并完成布局，这时加载外壳 UI 才不会被丢弃
+  // 【诊断开关】--tib-close-after=<毫秒>：到点后走正常关窗路径（TibWindow::Close），
+  // 用于验证"窗口关闭时仍有延迟任务待执行"这一条路径（这里曾经崩过，见 UiProbeTask 说明）。
+  const std::string close_after = ExperimentSwitch("tib-close-after");
+  if (!close_after.empty()) {
+    Log("实验：将在 " + close_after + "ms 后请求关闭窗口");
+    CefPostDelayedTask(TID_UI, new CloseWindowTask(this), std::atoi(close_after.c_str()));
+  }
+
+  // 外壳 UI 的唯一加载入口：必须在这里（OnWindowCreated 末尾、视图已挂载之后）。
+  // 早于此刻加载会被 CreateBrowserView 排入的 about:blank 导航覆盖；
+  // 也不要再加第二个入口（重复加载会让页面加载两遍并重置 DOM 状态）。
   LoadChromeUi();
 }
 
@@ -993,14 +1130,31 @@ void TibWindow::OnWindowDestroyed(CefRefPtr<CefWindow> window) {
   window_ = nullptr;
   chrome_view_ = nullptr;
   content_view_ = nullptr;
+  // 外壳 UI 客户端也持有本窗口的裸指针（不能改成 CefRefPtr，否则
+  // 窗口→视图→浏览器→客户端→窗口 会形成循环引用）。窗口销毁后必须断开，
+  // 否则窗口销毁过程中/之后仍在派发的加载回调会踩到已释放的 TibWindow。
+  if (chrome_client_) chrome_client_->Detach();
   for (auto& tab : tabs_) {
     if (tab->client) tab->client->Detach();
   }
   tabs_.clear();
+  // 注意：这里把自己从全局保活表里摘掉之后，本对象的生命周期就只由调用方
+  // （以及持有 CefRefPtr<TibWindow> 的延迟任务）决定了 —— 任何"裸 TibWindow*"
+  // 的持有者都必须在此之前用完，参见 UiProbeTask / WindowActivateTask 的说明。
   auto& windows = Windows();
   windows.erase(std::remove_if(windows.begin(), windows.end(),
                                [&](const CefRefPtr<TibWindow>& w) { return w.get() == this; }),
                 windows.end());
+
+  // 最后一个窗口销毁后必须主动结束消息循环。
+  //
+  // CEF 在多进程模式下确实会在最后一个顶层窗口关闭时自动退出消息循环，但本机默认跑的是
+  // **单进程兼容模式**（见 docs/STATUS.md §3），实测关窗后进程会一直挂着不退出。
+  // 对"即开即用"能效档位来说这是直接的承诺违背：用户以为关了，进程还在占内存。
+  if (windows.empty()) {
+    Log("最后一个窗口已销毁，结束消息循环");
+    CefQuitMessageLoop();
+  }
 }
 
 bool TibWindow::CanClose(CefRefPtr<CefWindow> window) {
@@ -1045,9 +1199,11 @@ void ChromeViewDelegate::OnBrowserCreated(CefRefPtr<CefBrowserView> browser_view
   (void)browser_view;
   (void)browser;
   Log("OnBrowserCreated(外壳 UI)：外壳视图已就绪");
-  // 在这里加载是安全的：该回调发生在视图完成创建之后，主框架此时才真正可用。
-  // 放在 OnWindowCreated 里会落在 detached frame 上被 CEF 丢弃（实测服务器收不到请求）。
-  if (window_) window_->LoadChromeUi();
+  // 这里**不能**直接加载外壳 UI：此回调发生在 CreateBrowserView 内部，而
+  // CreateBrowserView 会紧接着排入初始 URL（about:blank）的导航，
+  // 我们此刻发起的加载稍后会被它覆盖掉（实测表现为页面停在 about:blank）。
+  // 只标记就绪，真正的加载由 OnWindowCreated 在视图挂载完成后发起。
+  if (window_) window_->OnChromeViewReady();
 }
 
 /**
@@ -1091,6 +1247,14 @@ void TibWindow::RunUiSelfTest() {
     try { console.log('__TIB_CALL__' + JSON.stringify({ id: 0, method: 'diagnostics.log', params: { message: msg } })); } catch (e) {}
   }
   if (!window.tib || !window.tib.getState) { report('自检无法进行：window.tib 不存在'); return; }
+  // 把关键设置的真实取值打出来：设置持久化是最容易"看起来对其实没生效"的一环
+  window.tib.getSettings().then(function (st) {
+    report('getSettings：皮肤=' + (st && st.skin) + ' 主题=' + (st && st.theme)
+      + ' 搜索引擎=' + (st && st.searchEngine) + ' 书签栏=' + (st && st.bookmarkBarVisible)
+      + ' 主页按钮=' + (st && st.showHomeButton) + ' AI权限=' + (st && st.cliPermission));
+  }, function (e) {
+    report('getSettings 失败：' + (e && e.message ? e.message : String(e)));
+  });
   window.tib.getState().then(function (s) {
     report('getState 往返成功：标签数=' + ((s && s.tabs) ? s.tabs.length : 'n/a')
       + ' 皮肤=' + (s && s.settings ? s.settings.skin : 'n/a'));

@@ -90,8 +90,11 @@ std::string ExecutableDir() {
 }
 
 void Log(const std::string& message) {
-  // 【临时排查】带毫秒时间戳与线程号：崩溃发生在 libcef 内部且无 FATAL 行，
-  // 只有把最后一条日志精确到毫秒并区分线程，才能判断崩在哪个动作之后。
+  // 每条日志带「启动后毫秒数」与「线程号」，格式：[TiBrowser][+1234ms][t5678] 正文
+  //
+  // 为什么长期保留：本机的 CEF 崩溃（如 libcef 内部的 0xC0000005）不会写任何 FATAL 行，
+  // 日志里"最后一条是什么、是哪个线程打的"就是唯一的现场。查"开第二个标签页随机崩溃"
+  // 时正是靠它把崩溃时刻对齐到具体动作与线程上的。没有时间戳时只能按秒猜。
   static const auto t0 = std::chrono::steady_clock::now();
   const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                       std::chrono::steady_clock::now() - t0)

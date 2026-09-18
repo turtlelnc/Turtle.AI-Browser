@@ -89,13 +89,18 @@ std::string LegacyUserDataDir() {
 
 }  // namespace
 
-// ---------------------------------------------------------------- 临时崩溃诊断
+// ---------------------------------------------------------------- 崩溃诊断
 //
-// 【排查用，定位到根因后应删除】崩溃发生在 libcef.dll 内部（0xc0000005，偏移恒定），
-// 日志里没有任何 FATAL 行，WER 事件只给出 libcef 里的偏移，无法知道是谁调用的。
-// 这里安装「最后机会」异常过滤器（只在本进程真要死时才触发，不影响正常路径），
-// 把出错线程、出错指令地址、访问违例地址、寄存器与调用栈（模块+偏移+本程序符号）
-// 用纯 Win32 文件 API 直接落盘 —— 不走 CRT/iostream，避免堆已损坏时二次卡死。
+// 为什么要内置这个：CEF/libcef 内部的崩溃（尤其是 Alloy 风格下的视图/窗口时序问题）
+// 在日志里不留任何 FATAL 行，Windows 事件日志只给一个 libcef.dll 里的偏移，
+// 排查时只能靠猜。这里安装「最后机会」异常过滤器（只在本进程真要死时才触发，
+// 不影响正常路径），把出错线程、出错指令地址、访问违例地址、寄存器与调用栈
+// （模块+偏移+本程序符号）用纯 Win32 文件 API 直接落盘到程序目录下的
+// tibrowser-crash.log —— 不走 CRT/iostream，避免堆已损坏时二次卡死。
+//
+// 实测价值：0xC0000005（libcef+0x43208B0）那个"第二个标签页随机崩溃"就是靠它拿到
+// 调用栈（UI 线程、空对象虚调用、自 CefRunMessageLoop 进入）才定位到根因的。
+// 正常情况下不会产生任何输出：只有进程真的要异常终止时才会多出这个日志文件。
 #include <dbghelp.h>
 #include <strsafe.h>
 #pragma comment(lib, "dbghelp.lib")
@@ -377,10 +382,17 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
   early(std::string("边车状态：") + (service.running ? "运行中" : "未启动"));
 
   CefRunMessageLoop();
-  early("消息循环结束，关闭内核");
+  early("消息循环结束，开始收尾");
+
+  // 收尾顺序有意如此：
+  //   1. 先停边车 —— 它是独立进程，最慢，且与 CEF 无关；早停能让用户感知上的
+  //      "关掉了"更快成立（尤其是"即开即用"档位的承诺：关闭后不驻留内存）；
+  //   2. 再停本地资源服务器（在 CEF 还活着时停，避免 CEF 侧还有在途请求）；
+  //   3. 最后 CefShutdown 释放内核。
+  tib::StopService();
   tib::StopLocalServer();
   CefShutdown();
-  tib::StopService();
+  early("收尾完成，进程退出");
 
   if (mutex) ::CloseHandle(mutex);
   return 0;

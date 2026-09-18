@@ -53,6 +53,13 @@ class ChromeClient : public CefClient, public CefLifeSpanHandler, public CefDisp
 
   void SendEvent(const std::string& name, CefRefPtr<CefValue> payload);
 
+  /**
+   * 断开与本窗口的联系（窗口销毁时调用）。
+   * 客户端只持有裸 TibWindow*（持有 CefRefPtr 会形成循环引用），
+   * 窗口销毁后任何回调都必须变成空操作，否则会踩到已释放的窗口对象。
+   */
+  void Detach() { window_ = nullptr; }
+
  private:
   TibWindow* window_;
   CefRefPtr<CefBrowser> browser_;
