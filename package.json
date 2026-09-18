@@ -24,6 +24,7 @@
     "native:setup": "node scripts/build-native.mjs setup",
     "dist": "node scripts/build-dist.mjs",
     "check": "node scripts/check-release.mjs",
+    "acceptance": "node scripts/acceptance.mjs",
     "fetch:cef": "node scripts/fetch-cef.mjs",
     "make:icon": "node scripts/make-icon.mjs"
   },
