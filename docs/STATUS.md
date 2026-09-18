@@ -94,7 +94,15 @@ AI 能力经边车进程打通，17/17 桥接接口可用。
     第二遍重置第一遍的 DOM 状态，制造出偶发、难复现的时序问题。
 11. **单进程兼容模式下不要创建 `CefRequestContext`** —— 会让 `CreateBrowserView`
     卡死或崩溃（两套写法都试过）。无痕隔离因此不依赖自定义上下文。
-12. **`CefPostDelayedTask` 在本机不稳定**：同样的代码加上延迟任务后进程会退出，
+12. **切换标签页不要「摘视图再挂载」**。原实现用
+    `RemoveChildView(旧视图) + AddChildView(新视图)`，会让被摘下视图底层的
+    render widget / native window 被销毁，而 `CefBrowser` 仍然存活；
+    此后任意一次对它的虚调用就是 AV 崩溃。
+    实测证据（崩溃处理器落盘）：`libcef+0x43208B0`，空对象虚调用（`RAX=0`，读偏移 `0xF0`），
+    崩在 UI 线程、调用栈自 `CefRunMessageLoop` 起。用 `--tib-legacy-detach` 打开旧行为
+    可稳定复现（2 标签页 2 秒内崩、切换场景 0.9 秒崩），关掉后 1/2/3 标签页各 60 秒稳定。
+    **正确做法：只切可见性（`SetVisible`），视图始终挂在窗口上。**
+13. **`CefPostDelayedTask` 在本机不稳定**：同样的代码加上延迟任务后进程会退出，
     去掉后稳定存活 40 秒以上。定时逻辑（自检、兜底）请优先用别的方式实现。
 
 ## 4. 本机环境特有的坑
@@ -105,7 +113,8 @@ AI 能力经边车进程打通，17/17 桥接接口可用。
 | 缓存文件占用冲突 | `%APPDATA%` 被 OneDrive 同步 | 数据目录改用 `%LOCALAPPDATA%\TiBrowser` |
 | 边车"已启动"但握手超时 | 边车与原生用了不同数据目录 | 原生显式传 `--user-data` |
 | 界面截屏拿不到 | GPU 合成窗口 + 前台被占 | 用自检日志判断，不要用截图 |
-| **开第二个标签页后 ~9 秒崩溃** | 已定位到调用栈：`libcef+0x43208B0`，空对象虚调用（`RAX=0`，读 `0xF0`），崩在主线程消息循环里；与单进程无关，与网络无关，与二次导航无关 | 修复中（见 §6 第 1 条） |
+| 开第二个标签页后 ~9 秒崩溃 | 摘视图切标签（见 §3 第 12 条） | 已改为只切可见性；`--tib-legacy-detach` 保留旧行为供复现 |
+| 启动即退出且无 WER 事件、退出码 -1 | 被 `Stop-Process -Force` 强杀，**不是崩溃** | 排查时先确认没有外部强杀，否则实验数据会被污染 |
 
 ## 5. 构建与打包
 
@@ -115,31 +124,26 @@ npm run ui:build          # 构建 UI + 注入脚本 → dist/ui
 npm run service:build     # 构建边车
 npm run native:configure  # CMake 配置
 npm run native:build      # 编译 → build-native/TiBrowser.exe
+npm run native:setup      # 编译安装器 → build-installer/TiBrowserSetup.exe
 npm run dist              # 组装可分发的 release/dist（约 417 MB）
+npm run check             # 发行一致性自检
+npm run acceptance        # rc 验收测试（会自行起停进程，约 4 分钟）
 ```
 
 ⚠️ `ui:build` 之后必须让 `build-native/ui` 用上新产物（CMake POST_BUILD 会自动复制；
 手动构建时容易漏，漏了就会用到**过期的 tib-host.js** —— 这个坑真实发生过，
 症状是桥"完全不工作且没有任何报错"）。
 
+⚠️ **重建前必须先结束所有 `TiBrowser.exe`**，否则链接会报
+`LNK1104: 无法打开文件 TiBrowser.exe`。
+
 ## 6. 下一步（按价值排序）
 
-1. **修掉"开第二个标签页后崩溃"**（`libcef.dll`，0xc0000005，约 9 秒后）。
-   这是当前**唯一影响日常使用的稳定性缺陷**。
-   已确认的事实：
-   - 调用栈落在 `libcef+0x43208B0`，是**空对象上的虚调用**（`RAX=0`，访问偏移 `0xF0`），
-     崩在主线程消息循环里、由某个 UI 线程任务触发；
-   - 所有历史 WER 事件的 libcef 偏移完全一致（`0x43208b0`），说明是同一处确定性缺陷；
-   - **与单进程模式无关**（`--multi-process` 同样崩、同一偏移）；
-   - **与网络无关**（第二个标签是 `about:blank` 照样崩）；
-   - **与二次导航无关**（`navigated` 标志已加，日志里每个标签只导航一次，仍然崩）。
-   当前首要假设：Alloy 风格下用 `RemoveChildView(旧) + AddChildView(新)` 切换标签，
-   会让被摘下的 `CefBrowserView` 底层 render widget/native window 被销毁，
-   而 `CefBrowser` 仍存活；此后某个延迟任务对该已销毁对象做虚调用。
-   正在验证的修法是"只切可见性、不摘视图"（`SetVisible`）。
-   最小复现：`TiBrowser.exe --url=https://example.com --open=https://example.com`
-2. **安装器**：本机没有 NSIS/Inno/7-Zip/winget，当前 `release/dist` 是免安装便携版
-   + `启动 TiBrowser.cmd`。要做真正的 setup.exe，需要先装打包工具或引入打包依赖。
+1. **确认"开第二个标签页崩溃"已彻底修好**（根因与证据见 §3 第 12 条）。
+   修复方式是"只切可见性、不摘视图"；`--tib-legacy-detach` 保留旧行为供复现验证。
+   验收标准：`npm run acceptance` 的"三标签页稳定 60 秒"用例通过。
+2. **安装器**：已完成（`installer/`，自研、零外部依赖、用户级安装）。
+   仍缺的是**代码签名** —— 需要证书，无法在本机解决。
 3. **能效四档的进程模型**：目前只有 `--renderer-process-limit` 这一层，
    缺预加载（fast）、标签休眠（low）、退出即释放（ondemand）的真实实现。
 4. **增强型防护的云端部分**：需要用户配置服务商 Key，否则只能本地启发式。
