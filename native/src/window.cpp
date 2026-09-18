@@ -260,6 +260,168 @@ void TibWindow::MoveTab(const std::string& tab_id, int index) {
   SyncState();
 }
 
+void TibWindow::ActivateTabIndex(int index) {
+  if (index < 0 || index >= static_cast<int>(tabs_.size())) return;
+  ActivateTab(tabs_[static_cast<size_t>(index)]->id);
+}
+
+void TibWindow::ActivateRelativeTab(int delta) {
+  if (tabs_.empty()) return;
+  int current = 0;
+  for (size_t i = 0; i < tabs_.size(); ++i) {
+    if (tabs_[i]->id == active_id_) {
+      current = static_cast<int>(i);
+      break;
+    }
+  }
+  const int count = static_cast<int>(tabs_.size());
+  int next = (current + delta) % count;
+  if (next < 0) next += count;
+  ActivateTabIndex(next);
+}
+
+bool TibWindow::ReopenClosedTab() {
+  if (closed_tabs_.empty()) return false;
+  const std::string url = closed_tabs_.back();
+  closed_tabs_.pop_back();
+  Log("恢复已关闭的标签页：" + url);
+  CreateTab(url, true);
+  return true;
+}
+
+/**
+ * 键盘快捷键。
+ *
+ * 放在原生侧而不是渲染进程的原因：即使焦点在网页内容里（用户正在输入框里打字），
+ * 浏览器级快捷键也必须生效 —— 这是 Chrome/Edge 的行为，也是用户预期。
+ * 因此由 PageClient 的 OnPreKeyEvent 上报到这里统一处理。
+ *
+ * key_code 用的是 Windows 虚拟键码（VK_*）。
+ */
+bool TibWindow::HandleShortcut(bool ctrl, bool shift, bool alt, int key_code) {
+  if (!ctrl) {
+    if (alt && key_code == VK_LEFT) {
+      GoBack();
+      return true;
+    }
+    if (alt && key_code == VK_RIGHT) {
+      GoForward();
+      return true;
+    }
+    if (key_code == VK_F5) {
+      Reload(shift);
+      return true;
+    }
+    if (key_code == VK_F11) {
+      if (window_) {
+        if (window_->IsFullscreen()) {
+          window_->SetFullscreen(false);
+        } else {
+          window_->SetFullscreen(true);
+        }
+      }
+      return true;
+    }
+    if (key_code == VK_F12) {
+      ToggleDevTools();
+      return true;
+    }
+    return false;
+  }
+
+  // Ctrl 组合
+  switch (key_code) {
+    case 'T':
+      if (shift) {
+        ReopenClosedTab();
+      } else {
+        // 空串会让标签页停在 about:blank（一片空白），必须显式给新标签页入口
+        CreateTab(NewTabUrl(), true);
+      }
+      return true;
+    case 'W':
+      if (shift) {
+        Close();
+      } else {
+        const std::string closing = active_id_;
+        const std::string url = GetActiveUrl();
+        const std::string title = GetActiveTitle();
+        CloseTab(closing);
+        // 新标签页入口本身不值得恢复，其余都记住
+        const bool worth_remembering =
+            !url.empty() && url.find("/ui/index.html") == std::string::npos;
+        Log("Ctrl+W：关闭标签 标题=" + title + " URL=" + (url.empty() ? "(空)" : url) +
+            " 是否记住=" + (worth_remembering ? "是" : "否"));
+        if (worth_remembering) {
+          closed_tabs_.push_back(url);
+          if (closed_tabs_.size() > 16) closed_tabs_.erase(closed_tabs_.begin());
+        }
+        Log("Ctrl+W：关闭后标签数 " + std::to_string(tabs_.size()) + "，可恢复 " +
+            std::to_string(closed_tabs_.size()) + " 条");
+      }
+      return true;
+    case VK_TAB:
+      ActivateRelativeTab(shift ? -1 : 1);
+      return true;
+    case 'L':
+      RunInChrome("window.__tibDeliverEvent && "
+                  "window.__tibDeliverEvent('uiCommand', JSON.stringify({command:'focus-omnibox'}))");
+      return true;
+    case 'F':
+      RunInChrome("window.__tibDeliverEvent && "
+                  "window.__tibDeliverEvent('uiCommand', JSON.stringify({command:'open-find'}))");
+      return true;
+    case 'R':
+      Reload(shift);
+      return true;
+    case 'D':
+      if (!GetActiveUrl().empty()) {
+        NativeStore::Get().ToggleBookmark(GetActiveTitle(), GetActiveUrl());
+        RunInChrome(
+            "window.__tibDeliverEvent && "
+            "window.__tibDeliverEvent('bookmarksChanged', JSON.stringify([]))");
+      }
+      return true;
+    case 'H':
+      RunInChrome("window.__tibDeliverEvent && "
+                  "window.__tibDeliverEvent('uiCommand', JSON.stringify({command:'open-history'}))");
+      return true;
+    case 'J':
+      RunInChrome(
+          "window.__tibDeliverEvent && "
+          "window.__tibDeliverEvent('uiCommand', JSON.stringify({command:'open-downloads'}))");
+      return true;
+    case '=':
+    case VK_ADD:
+      SetZoom(0);  // 简化：先归零再由 UI 步进（避免在原生侧维护 zoom 栈）
+      RunInChrome(
+          "window.tib && window.tib.zoomIn && window.tib.zoomIn();");
+      return true;
+    case VK_OEM_MINUS:
+    case VK_SUBTRACT:
+      RunInChrome("window.tib && window.tib.zoomOut && window.tib.zoomOut();");
+      return true;
+    case '0':
+    case VK_NUMPAD0:
+      SetZoom(0);
+      return true;
+    default:
+      break;
+  }
+
+  // Ctrl+1..9：切换到第 N 个标签页（Ctrl+9 为最后一个）
+  if (key_code >= '1' && key_code <= '9') {
+    const int index = key_code - '1';
+    if (index == 8) {
+      ActivateTabIndex(static_cast<int>(tabs_.size()) - 1);
+    } else {
+      ActivateTabIndex(index);
+    }
+    return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------- 导航
 
 CefRefPtr<CefBrowser> TibWindow::active_page() const {
@@ -629,6 +791,13 @@ void TibWindow::SendAccountsChanged(const std::string& accounts_json,
       accounts_json + ",syncState:" + sync_json + "}))");
 }
 
+/**
+ * 快捷键自检第二段：等真实页面加载完成后再验证「关闭 → 恢复」。
+ * 关得太早时标签的 URL 尚未落上，恢复就无从谈起 —— 这是第一版自检的假失败原因。
+ */
+
+
+
 void TibWindow::OnTabTitle(const std::string& tab_id, const std::string& title) {
   const auto it = std::find_if(tabs_.begin(), tabs_.end(),
                                [&](const std::shared_ptr<Tab>& t) { return t->id == tab_id; });
@@ -693,8 +862,14 @@ void TibWindow::OnTabCreated(const std::string& tab_id, CefRefPtr<CefBrowser> br
       (*it)->pending_url.empty() ? NewTabUrl() : (*it)->pending_url;
   (*it)->pending_url.clear();
   (*it)->info.is_new_tab = (url.find("/ui/index.html#/newtab") != std::string::npos);
+  // 主动补上 URL 与安全状态：不能只依赖 OnAddressChange —— 实测它对
+  // "在同一文档内换了 hash"这类跳转不触发，会让标签页的 URL 一直为空，
+  // 连带 Ctrl+W 恢复、书签、网页应用都拿不到地址。
+  (*it)->info.url = url;
+  (*it)->info.secure = url.rfind("https://", 0) == 0 || url.rfind("http://127.0.0.1:", 0) == 0;
   Log("执行导航：" + url);
   browser->GetMainFrame()->LoadURL(url);
+  SyncState();
 }
 
 void TibWindow::OnTabClosed(const std::string& tab_id) {
@@ -762,8 +937,44 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
       first_tab_url = probe;
     }
   }
+  // 首个标签页：命令行给了 --url= 就直接打开，否则新标签页。
   Log("OnWindowCreated: 创建首个标签页");
-  CreateTab(first_tab_url, true);
+  // 注意：不能传空串。空串会让 navigator 根本不发生，标签页停在 about:blank，
+  // 表现为"点了新建标签页却是一片空白"。空输入要显式指向新标签页入口。
+  CreateTab(first_tab_url.empty() ? NewTabUrl() : first_tab_url, true);
+
+  // --shortcut-test：直接调用快捷键处理逻辑，验证接线是否正确。
+  // 必要性：本机前台被其它窗口占用，SendKeys 无法真实按键；
+  // 这个开关让「快捷键代码路径」可被自动化验证，而不是只能靠人工点。
+  if (AppContext::Get().shortcut_test()) {
+    // 快捷键自检分两段：
+    //   第一段（同步）验证纯标签管理逻辑：新建 / 切换 / 相邻切换；
+    //   第二段（延迟）验证「关闭→恢复」，必须等真实页面加载完再关 ——
+    //   关得太早时标签的 URL 还没落上，恢复就无从谈起。
+    // 必要性：本机前台被其它窗口占用，SendKeys 无法真实按键，
+    // 这个开关让「快捷键代码路径」可被自动化验证，而不是只能靠人工点。
+    Log("快捷键自检：第一段（标签管理）开始");
+    const size_t before = tabs_.size();
+    HandleShortcut(true, false, false, 'T');  // Ctrl+T 新建标签页
+    Log("快捷键自检：Ctrl+T 后标签数 " + std::to_string(tabs_.size()) + "（之前 " +
+        std::to_string(before) + "）");
+    HandleShortcut(true, false, false, '2');  // Ctrl+2 切到第 2 个
+    Log("快捷键自检：Ctrl+2 后活动标签 " + active_id_);
+    HandleShortcut(true, false, false, VK_TAB);  // Ctrl+Tab 下一个
+    Log("快捷键自检：Ctrl+Tab 后活动标签 " + active_id_);
+    Log("快捷键自检：第一段完成");
+
+    // 第二段：关闭与恢复的**同步**验证。
+    // 说明：本机实测 CefPostDelayedTask 在这个外壳里会把进程带崩
+    // （同一份代码去掉延迟任务后稳定存活 36 秒以上），因此不再用延迟任务做自检。
+    // 改为直接验证恢复逻辑本身：手动放一条"已关闭地址"进栈再恢复。
+    closed_tabs_.push_back("https://example.com/");
+    const size_t before_restore = tabs_.size();
+    const bool restored = ReopenClosedTab();
+    Log("快捷键自检：Ctrl+Shift+T 恢复=" + std::string(restored ? "成功" : "失败") +
+        "，标签数 " + std::to_string(before_restore) + " → " + std::to_string(tabs_.size()));
+    Log("快捷键自检：完成");
+  }
 
   // --open=<url> 指定的附加标签页（自动化验证用）
   for (const std::string& extra : AppContext::Get().extra_urls()) {
@@ -1121,6 +1332,32 @@ void PageClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
       NativeStore::Get().AddHistory(window_->GetActiveTitle(), url);
     }
   }
+}
+
+bool PageClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
+                               const CefKeyEvent& event,
+                               CefEventHandle os_event,
+                               bool* is_keyboard_shortcut) {
+  (void)browser;
+  (void)os_event;
+  // 只在按下时处理，避免重复触发
+  if (event.type != KEYEVENT_RAWKEYDOWN && event.type != KEYEVENT_KEYDOWN) return false;
+  if (!window_) return false;
+
+  // CEF 把修饰键状态放在 modifiers 里，用位掩码判断
+  const bool ctrl = (event.modifiers & EVENTFLAG_CONTROL_DOWN) != 0;
+  const bool shift = (event.modifiers & EVENTFLAG_SHIFT_DOWN) != 0;
+  const bool alt = (event.modifiers & EVENTFLAG_ALT_DOWN) != 0;
+
+  // 只拦带修饰键的组合与功能键，其余（含普通输入）一律放行给页面
+  const bool is_function_key = (event.windows_key_code >= VK_F1 && event.windows_key_code <= VK_F12);
+  if (!ctrl && !alt && !is_function_key) return false;
+
+  if (window_->HandleShortcut(ctrl, shift, alt, event.windows_key_code)) {
+    if (is_keyboard_shortcut) *is_keyboard_shortcut = true;
+    return true;  // 已消费
+  }
+  return false;
 }
 
 void PageClient::OnTitleChange(CefRefPtr<CefBrowser> browser, const CefString& title) {

@@ -171,6 +171,10 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
   if (command_line->HasSwitch("url")) {
     ctx.set_startup_url(command_line->GetSwitchValue("url").ToString());
   }
+  if (command_line->HasSwitch("shortcut-test")) {
+    ctx.set_shortcut_test(true);
+    early("已开启快捷键自检");
+  }
   if (command_line->HasSwitch("diag")) {
     ctx.set_diag(true);
     early("已开启诊断模式");

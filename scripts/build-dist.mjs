@@ -89,7 +89,7 @@ writeFileSync(
 writeFileSync(
   join(OUT, 'README-发行说明.txt'),
   [
-    'TiBrowser v1.0.0-rc1 (build 260913)',
+    'TiBrowser v1.0.1-rc2 (build 260918)',
     '',
     '这是免安装的便携版本：整个目录复制到任意位置，双击「启动 TiBrowser.cmd」或直接运行 TiBrowser.exe 即可。',
     '',

@@ -1,4 +1,4 @@
-# TiBrowser v1.0.0-rc1 架构（build 260913）
+# TiBrowser v1.0.1-rc2 架构（build 260918）
 
 > 本文件是 **接口契约的唯一事实来源**。native / service / renderer 三方必须严格按此实现，
 > 任何一方需要扩展接口时，先改本文件，再改代码。

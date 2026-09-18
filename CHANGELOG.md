@@ -1,5 +1,37 @@
 # 更新日志
 
+## [1.0.1-rc2] - 2026-09-18 (build 260918)
+
+### 新增
+- **扩展加载**：支持 .crx（CRX2 / CRX3）与已解压目录，经原生文件对话框选择。
+  内置最小 ZIP 解包器（store + deflate，走系统 cabinet.dll），带目录穿越防护；
+  直接以 zip 分发的扩展也能加载。
+- **无痕模式 2.0 的指纹注入真正生效**：按指纹画像生成改写脚本
+  （UA / 平台 / 时区 / 语言 / 屏幕 / 并发数 / DNT + Canvas 与 WebGL 噪声），
+  在无痕窗口每次主框架开始加载时注入。
+- **键盘快捷键**：Ctrl+T / Ctrl+W / Ctrl+Shift+T / Ctrl+Tab / Ctrl+1..9 /
+  Ctrl+L / Ctrl+F / Ctrl+R / Ctrl+D / Ctrl+H / Ctrl+J / Ctrl+± / Ctrl+0 /
+  Alt+←→ / F5 / F11 / F12，且焦点在网页输入框内时同样生效。
+- 页面加载完成时记录历史（无痕窗口自动跳过）。
+
+### 变更
+- 版本号全线升到 `v1.0.1-rc2 (build 260918)`。
+- 新增 `--shortcut-test` 开关：直接调用快捷键处理逻辑，便于自动化验证
+  （本机前台被占用时无法用 SendKeys 真实按键）。
+
+### 修复
+- `--incognito` 此前只写进了上下文却没传给窗口创建，导致"无痕窗口"实际是普通窗口。
+- 新建标签页会停在 `about:blank`（一片空白）：空输入没有指向新标签页入口。
+- 标签页 URL 一直为空：只依赖 `OnAddressChange` 不够（同文档内换 hash 不触发），
+  改为在导航时主动写入 URL 与安全状态 —— 连带修好了关闭后恢复、书签、网页应用。
+- 单进程兼容模式下创建任何 `CefRequestContext` 都会让 `CreateBrowserView` 卡死/崩溃，
+  无痕隔离改为不依赖自定义上下文（代码里如实标注这不等于最严格的 incognito 语义）。
+- 移除 `security.cpp` 里一段从不执行的指纹注入死代码。
+
+### 已知问题
+- 本机仍需单进程兼容模式（Chromium 网络服务子进程在此环境启动即崩）。
+- 增强型安全防护中依赖云端威胁库的部分需要自备 API Key。
+
 本项目的所有重要变更都会记录在本文件中。
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，

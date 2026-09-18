@@ -65,7 +65,8 @@ class PageClient : public CefClient,
                    public CefLoadHandler,
                    public CefDisplayHandler,
                    public CefRequestHandler,
-                   public CefContextMenuHandler {
+                   public CefContextMenuHandler,
+                   public CefKeyboardHandler {
  public:
   PageClient(TibWindow* window, std::string tab_id)
       : window_(window), tab_id_(std::move(tab_id)) {}
@@ -76,6 +77,16 @@ class PageClient : public CefClient,
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
   CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
+  CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
+
+  /**
+   * 快捷键拦截：即使焦点在网页输入框里也要生效（Chrome 的行为）。
+   * 返回 true 表示已消费，事件不再传给页面。
+   */
+  bool OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
+                     const CefKeyEvent& event,
+                     CefEventHandle os_event,
+                     bool* is_keyboard_shortcut) override;
   bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
                                CefRefPtr<CefFrame> frame,
                                CefProcessId source_process,
@@ -204,6 +215,14 @@ class TibWindow : public CefWindowDelegate, public CefBrowserViewDelegate {
   void CloseTab(const std::string& tab_id);
   void ActivateTab(const std::string& tab_id);
   void MoveTab(const std::string& tab_id, int index);
+  /** 按序号激活标签页（0 起）；越界忽略 */
+  void ActivateTabIndex(int index);
+  /** 相对切换标签页（+1 下一个 / -1 上一个，环形） */
+  void ActivateRelativeTab(int delta);
+  /** 恢复最近关闭的标签页（Ctrl+Shift+T） */
+  bool ReopenClosedTab();
+  /** 处理键盘快捷键；返回 true 表示已消费 */
+  bool HandleShortcut(bool ctrl, bool shift, bool alt, int key_code);
   void Navigate(const std::string& input);
   void GoBack();
   void GoForward();
@@ -313,6 +332,8 @@ class TibWindow : public CefWindowDelegate, public CefBrowserViewDelegate {
   CefRefPtr<CefBrowserView> content_view_;
   std::vector<std::shared_ptr<Tab>> tabs_;
   std::string active_id_;
+  /** 最近关闭的标签页地址（Ctrl+Shift+T 恢复用），最多保留 16 条 */
+  std::vector<std::string> closed_tabs_;
   int chrome_height_ = kChromeHeight;
   int sidebar_width_ = 0;
   bool overlay_open_ = false;

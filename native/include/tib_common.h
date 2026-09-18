@@ -104,6 +104,10 @@ class AppContext {
   bool compat_single_process() const { return compat_single_process_; }
   void set_compat_single_process(bool v) { compat_single_process_ = v; }
 
+  /** 快捷键自检模式（--shortcut-test）：启动时直接调用快捷键处理逻辑，便于自动化验证 */
+  bool shortcut_test() const { return shortcut_test_; }
+  void set_shortcut_test(bool v) { shortcut_test_ = v; }
+
   /** 诊断模式：为真时周期性把 UI/页面状态回流到日志（--diag） */
   bool diag() const { return diag_; }
   void set_diag(bool v) { diag_ = v; }
@@ -111,6 +115,7 @@ class AppContext {
  private:
   bool incognito_ = false;
   bool diag_ = false;
+  bool shortcut_test_ = false;
   bool compat_single_process_ = false;
   std::string protection_level_ = "standard";
   std::string energy_mode_ = "standard";
