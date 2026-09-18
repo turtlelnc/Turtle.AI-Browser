@@ -131,7 +131,10 @@ void NativeStore::Init() {
   ready_ = true;
 
   // ---- 设置 ----
-  if (CefRefPtr<CefDictionaryValue> d = ParseObject(ReadJson("settings.json"))) {
+  const std::string settings_raw = ReadJson("settings.json");
+  Log("NativeStore: 读取 " + dir_ + "\\settings.json（" + std::to_string(settings_raw.size()) +
+      " 字节）");
+  if (CefRefPtr<CefDictionaryValue> d = ParseObject(settings_raw)) {
     settings.search_engine = Str(d, "searchEngine", settings.search_engine);
     settings.homepage = Str(d, "homepage", settings.homepage);
     settings.theme = Str(d, "theme", settings.theme);
@@ -143,6 +146,11 @@ void NativeStore::Init() {
     settings.cli_permission = Str(d, "cliPermission", settings.cli_permission);
     settings.ai_enabled = Bool(d, "aiEnabled", true);
     settings.service_auto_start = Bool(d, "serviceAutoStart", true);
+    Log("NativeStore: 已应用设置 —— 皮肤=" + settings.skin + " 主题=" + settings.theme +
+        " 搜索引擎=" + settings.search_engine);
+  } else if (!settings_raw.empty()) {
+    Log("NativeStore: settings.json 解析失败，改用默认设置（内容前 120 字节：" +
+        settings_raw.substr(0, 120) + "）");
   }
 
   // ---- 书签 ----

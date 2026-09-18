@@ -22,6 +22,7 @@
     "native:build": "node scripts/build-native.mjs build",
     "native:run": "node scripts/build-native.mjs run",
     "dist": "node scripts/build-dist.mjs",
+    "check": "node scripts/check-release.mjs",
     "fetch:cef": "node scripts/fetch-cef.mjs",
     "make:icon": "node scripts/make-icon.mjs"
   },

@@ -90,7 +90,14 @@ std::string ExecutableDir() {
 }
 
 void Log(const std::string& message) {
-  std::string line = "[TiBrowser] " + message + "\n";
+  // 【临时排查】带毫秒时间戳与线程号：崩溃发生在 libcef 内部且无 FATAL 行，
+  // 只有把最后一条日志精确到毫秒并区分线程，才能判断崩在哪个动作之后。
+  static const auto t0 = std::chrono::steady_clock::now();
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now() - t0)
+                      .count();
+  std::string line = "[TiBrowser][+" + std::to_string(ms) + "ms][t" +
+                     std::to_string(::GetCurrentThreadId()) + "] " + message + "\n";
   fputs(line.c_str(), stderr);
   const std::string& dir = AppContext::Get().user_data_dir();
   if (dir.empty()) return;

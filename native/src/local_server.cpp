@@ -1,6 +1,8 @@
 // 本地资源服务器实现（Winsock，最小 HTTP/1.1，仅回环）
 #include "local_server.h"
 
+#include "store.h"
+
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
@@ -128,11 +130,20 @@ std::string HostBridgeScript() {
  * 把宿主脚本内联进 index.html。
  * 必须排在 UI 自身的 module 脚本之前，否则 React 首次渲染时拿不到 window.tib，
  * 会退化到 mock 桥并提示"未检测到原生宿主"。
+ *
+ * 首屏引导数据（__TIB_BOOT__）也在这里注入，且必须读**磁盘上的设置**而不是写死的默认值：
+ * 否则用户改过主题/皮肤后，首帧仍按默认值绘制，表现为"改了设置但重启后没生效"。
  */
 std::string InjectHostBridge(const std::string& html) {
-  const AppContext& ctx = AppContext::Get();
-  const std::string script = "<script>" + HostBridgeScript() + "</script><script>window.__TIB_BOOT__={skin:'" +
-                             ctx.skin() + "',theme:'system',perf:'high'};</script>";
+  const AppSettings& s = NativeStore::Get().settings;
+  const std::string skin = s.skin.empty() ? "tibrowser" : s.skin;
+  const std::string theme = s.theme.empty() ? "system" : s.theme;
+  const std::string perf = s.perf.empty() ? "high" : s.perf;
+  Log("注入首屏引导：皮肤=" + skin + " 主题=" + theme + " 性能档=" + perf);
+
+  const std::string script = "<script>" + HostBridgeScript() +
+                             "</script><script>window.__TIB_BOOT__={skin:'" + skin +
+                             "',theme:'" + theme + "',perf:'" + perf + "'};</script>";
   const std::string marker = "<head>";
   const size_t pos = html.find(marker);
   if (pos == std::string::npos) return script + html;
