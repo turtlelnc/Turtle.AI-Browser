@@ -32,6 +32,9 @@ size_t BlocklistSize();
 /** 初始化黑名单（读取 resources/blocklists/*.txt），幂等 */
 void InitSecurity();
 
+/** 生成无痕模式 2.0 的指纹改写脚本（由 PageClient 在页面开始加载时注入） */
+std::string BuildFingerprintScript();
+
 /** 注入无痕模式 2.0 的指纹改写脚本 */
 void ApplyFingerprintProfile(CefRefPtr<CefRequestContext> context);
 

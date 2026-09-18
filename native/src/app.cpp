@@ -57,7 +57,10 @@ void TibApp::OnContextInitialized() {
   NativeStore::Get().Init();
   AppContext::Get().set_skin(NativeStore::Get().settings.skin);
   RegisterTibSchemeHandlers();
-  CreateMainWindow(false);
+  // 无痕窗口由 --incognito 决定（AppContext 已在 main 里解析）
+  const bool incognito = AppContext::Get().incognito();
+  Log(std::string("创建主窗口：") + (incognito ? "无痕窗口" : "普通窗口"));
+  CreateMainWindow(incognito);
   Log(std::string("CEF 上下文初始化完成，内核版本 ") + CEF_VERSION);
 }
 

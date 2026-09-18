@@ -13,19 +13,19 @@
  */
 
 // ---------------------------------------------------------------------------
-// 版本常量（展示格式：v1.0.0-rc1 (build 260913)）
+// 版本常量（展示格式：v1.0.1-rc2 (build 260918)）
 // ---------------------------------------------------------------------------
 
 /**
  * 应用版本号。
  * 注意：`src/shared/constants.ts` 中仍是 v0.1.0 遗留的 `APP_VERSION = '1.0.0-beta'`；
- * 该文件的归属者不在本次改动范围内，故 v1.0.0-rc1 的权威版本号从本文件导出，
+ * 该文件的归属者不在本次改动范围内，故 v1.0.1-rc2 的权威版本号从本文件导出，
  * 待 constants.ts 对齐后可直接改为一处转发。
  */
-export const TIB_VERSION = '1.0.0-rc1'
+export const TIB_VERSION = '1.0.1-rc2'
 /** 构建号 */
-export const TIB_BUILD = 260913
-/** 版本展示串：`v1.0.0-rc1 (build 260913)` */
+export const TIB_BUILD = 260918
+/** 版本展示串：`v1.0.1-rc2 (build 260918)` */
 export const TIB_VERSION_LABEL = `v${TIB_VERSION} (build ${TIB_BUILD})`
 /** 官网 */
 export const TIB_WEBSITE = 'https://turtleweb.cc.cd'
@@ -299,7 +299,7 @@ export interface AiConnectionState {
 /** AI 模式：浏览 / 本地办公 / 本地开发 */
 export type AiMode = 'browse' | 'office' | 'dev'
 
-/** 对话消息（`src/shared/types.ts` 里也有同名结构，本文件是 v1.0.0-rc1 的权威版本） */
+/** 对话消息（`src/shared/types.ts` 里也有同名结构，本文件是 v1.0.1-rc2 的权威版本） */
 export interface AiMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
@@ -375,7 +375,7 @@ export interface ServiceStatus {
 }
 
 // ---------------------------------------------------------------------------
-// 标签页 / 浏览器状态（v1.0.0-rc1 版）
+// 标签页 / 浏览器状态（v1.0.1-rc2 版）
 // ---------------------------------------------------------------------------
 
 export type OverlayName =
@@ -457,7 +457,7 @@ export interface FindResult {
   finalUpdate: boolean
 }
 
-/** 设置项（v1.0.0-rc1：皮肤 / 性能档 / 能效等纳入设置快照） */
+/** 设置项（v1.0.1-rc2：皮肤 / 性能档 / 能效等纳入设置快照） */
 export interface TibSettings {
   /** 默认搜索引擎 id，取值见 constants.ts 的 SEARCH_ENGINES */
   searchEngine: string

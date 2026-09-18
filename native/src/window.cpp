@@ -4,6 +4,7 @@
 #include "local_server.h"
 #include "router.h"
 #include "scheme.h"
+#include "store.h"
 #include "security.h"
 
 #include <algorithm>
@@ -137,13 +138,24 @@ std::string TibWindow::CreateTab(const std::string& input, bool activate) {
   // 先把标签登记进列表，回调里才能反查到
   tabs_.push_back(tab);
 
-  // 每个标签页一个独立 BrowserView；无痕窗口使用内存态 RequestContext
+  // 无痕窗口的存储隔离。
+  //
+  // 本机实测结论（勿轻易改回）：在单进程兼容模式下创建**任何** CefRequestContext，
+  // CreateBrowserView 都会在返回后卡死/崩溃 —— 日志停在 "BrowserView 已创建"，
+  // OnAfterCreated 永不触发，进程随后退出。两套写法都试过：
+  //   (a) 全局无痕上下文（cache_path 留空）
+  //   (b) 独立 cache_path 的上下文
+  // 表现完全一致，因此问题在"创建自定义上下文"这个动作本身，与参数无关。
+  //
+  // 无痕的隔离改为不依赖自定义上下文：
+  //   * 不写历史、不写书签（各写入点按 incognito_ 判断）；
+  //   * 注入指纹改写脚本，降低跨站识别度。
+  // 诚实标注：这不等同于 Chromium 语义上最严格的 incognito；用户可见的三个承诺
+  // （不留历史、可改指纹、关窗即清会话）成立，但 Cookie 仍会落在默认 profile 分区。
+  // 等网络服务子进程问题根治、可以退回多进程模式后，应恢复独立 RequestContext。
   CefRefPtr<CefRequestContext> context;
   if (incognito_) {
-    CefRequestContextSettings context_settings;
-    context_settings.persist_session_cookies = false;
-    context = CefRequestContext::CreateContext(context_settings, nullptr);
-    ApplyFingerprintProfile(context);  // 无痕模式 2.0：注入指纹改写
+    ApplyFingerprintProfile(nullptr);
   }
 
   CefBrowserSettings browser_settings;
@@ -1078,6 +1090,36 @@ void PageClient::OnLoadError(CefRefPtr<CefBrowser> browser,
     window_->OnTabTitle(tab_id_, "无法访问此网站");
     window_->OnTabUrl(tab_id_, failedUrl.ToString());
     Log("加载失败 " + failedUrl.ToString() + " :: " + errorText.ToString());
+  }
+}
+
+void PageClient::OnLoadStart(CefRefPtr<CefBrowser> browser,
+                             CefRefPtr<CefFrame> frame,
+                             TransitionType transition_type) {
+  (void)browser;
+  (void)transition_type;
+  if (!frame || !frame->IsMain()) return;
+
+  // 无痕模式 2.0：在主框架开始加载时注入指纹改写脚本。
+  // 只在无痕窗口注入 —— 普通窗口保持真实指纹，否则会破坏正常的站点登录与风控。
+  if (!window_ || !window_->incognito()) return;
+  const std::string script = BuildFingerprintScript();
+  if (script.size() < 80) return;  // 全是"跟随系统"时脚本几乎是空的，没必要注入
+  Log("无痕模式 2.0：向页面注入指纹改写脚本（" + std::to_string(script.size()) + " 字节）");
+  frame->ExecuteJavaScript(script, frame->GetURL(), 0);
+}
+
+void PageClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
+                           CefRefPtr<CefFrame> frame,
+                           int httpStatusCode) {
+  (void)browser;
+  if (!frame || !frame->IsMain()) return;
+  // 记录历史（无痕窗口不记录）—— 放在加载完成后，此时标题才是最终的
+  if (window_ && !window_->incognito()) {
+    const std::string url = frame->GetURL().ToString();
+    if (!url.empty() && url.find("/ui/index.html") == std::string::npos) {
+      NativeStore::Get().AddHistory(window_->GetActiveTitle(), url);
+    }
   }
 }
 

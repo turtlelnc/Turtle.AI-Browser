@@ -9,9 +9,9 @@ import type { CliPermissionLevel, Settings, SearchEngineId } from './types.js'
 
 /** 产品信息（ARCHITECTURE.md §6 规定：APP_VERSION/APP_BUILD 为唯一版本来源） */
 export const APP_NAME = 'TiBrowser'
-export const APP_VERSION = '1.0.0-rc1'
-export const APP_BUILD = 260913
-/** 展示格式：v1.0.0-rc1 (build 260913) */
+export const APP_VERSION = '1.0.1-rc2'
+export const APP_BUILD = 260918
+/** 展示格式：v1.0.1-rc2 (build 260918) */
 export const APP_VERSION_LABEL = `v${APP_VERSION} (build ${APP_BUILD})`
 
 /** 内部伪协议 / 页面标识 */

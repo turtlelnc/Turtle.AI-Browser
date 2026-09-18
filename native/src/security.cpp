@@ -1,6 +1,8 @@
 // 三档安全浏览、下载放行、无痕指纹改写
 #include "security.h"
 
+#include "store.h"
+
 #include <windows.h>
 
 #include <algorithm>
@@ -285,52 +287,78 @@ ScanResult CheckDownload(const std::string& url, const std::string& filename) {
   return result;
 }
 
+/** JSON 字符串字面量（含引号），复用一个极简转义 */
+std::string QuoteJs(const std::string& in) { return "\"" + JsonEscapePublic(in) + "\""; }
+
+/**
+ * 生成指纹改写脚本（无痕模式 2.0）。
+ *
+ * 注入时机：页面主框架开始加载时，用 CefFrame::ExecuteJavaScript 执行。
+ * 采用「重定义属性为不可配置」的方式，降低被页面后续代码覆盖的概率。
+ *
+ * 诚实说明：这是浏览器侧的尽力而为防护，**不是完整的指纹隔离**。
+ * 真正强隔离需要按标签页隔离渲染进程 + 完整的 UA Client Hints 改写；
+ * 当前只做属性改写与噪声，未启用的项不会在脚本里假装生效。
+ */
+std::string BuildFingerprintScript() {
+  const FingerprintProfile& f = NativeStore::Get().fingerprint;
+  std::ostringstream js;
+  js << "(function(){try{";
+  js << "var def=function(o,k,v){try{Object.defineProperty(o,k,{get:function(){return v;},"
+        "configurable:false});}catch(e){}};";
+
+  auto follow = [](const std::string& v) { return v.empty() || v == "跟随系统"; };
+  if (!follow(f.user_agent)) {
+    js << "def(navigator,'userAgent'," << QuoteJs(f.user_agent) << ");";
+    js << "def(navigator,'appVersion'," << QuoteJs(f.user_agent) << ");";
+  }
+  if (!follow(f.platform)) js << "def(navigator,'platform'," << QuoteJs(f.platform) << ");";
+  if (!follow(f.language)) {
+    js << "def(navigator,'language'," << QuoteJs(f.language) << ");";
+    js << "def(navigator,'languages',[" << QuoteJs(f.language) << "]);";
+  }
+  if (!follow(f.hardware_concurrency))
+    js << "def(navigator,'hardwareConcurrency'," << f.hardware_concurrency << ");";
+  if (!follow(f.do_not_track))
+    js << "def(navigator,'doNotTrack'," << QuoteJs(f.do_not_track) << ");";
+  if (!follow(f.timezone)) {
+    js << "var tz=" << QuoteJs(f.timezone) << ";";
+    js << "try{var ro=Intl.DateTimeFormat.prototype.resolvedOptions;"
+          "Intl.DateTimeFormat.prototype.resolvedOptions=function(){"
+          "var o=ro.apply(this,arguments);if(o&&o.timeZone)o.timeZone=tz;return o;};}catch(e){}";
+  }
+  if (!follow(f.screen)) {
+    const size_t x = f.screen.find('x');
+    if (x != std::string::npos) {
+      const std::string w = f.screen.substr(0, x);
+      const std::string h = f.screen.substr(x + 1);
+      js << "def(screen,'width'," << w << ");def(screen,'height'," << h << ");";
+      js << "def(screen,'availWidth'," << w << ");def(screen,'availHeight'," << h << ");";
+    }
+  }
+  if (f.canvas_noise) {
+    js << "try{var gid=CanvasRenderingContext2D.prototype.getImageData;"
+          "CanvasRenderingContext2D.prototype.getImageData=function(){"
+          "var d=gid.apply(this,arguments);try{if(d&&d.data){"
+          "for(var i=0;i<d.data.length;i+=997){d.data[i]=(d.data[i]+1)&255;}}}catch(e){}"
+          "return d;};}catch(e){}";
+  }
+  if (f.webgl_noise) {
+    js << "try{var gp=WebGLRenderingContext.prototype.getParameter;"
+          "WebGLRenderingContext.prototype.getParameter=function(p){"
+          "if(p===37445)return 'TiBrowser';if(p===37446)return 'TiBrowser Graphics';"
+          "return gp.apply(this,arguments);};}catch(e){}";
+  }
+  js << "}catch(e){}})();";
+  return js.str();
+}
+
 void ApplyFingerprintProfile(CefRefPtr<CefRequestContext> context) {
-  if (!context) return;
-  // 无痕模式 2.0：在页面脚本运行前注入指纹噪音，降低跨站识别度。
-  // 说明：这是浏览器侧的最小可用实现，完整指纹库（UA/时区/分辨率等）由设置项驱动，
-  // 变更后需要重启无痕会话生效。
-  const char* script = R"JS(
-(function () {
-  if (window.__tibFingerprintApplied) return;
-  window.__tibFingerprintApplied = true;
-  var seed = 0;
-  try { seed = parseInt((navigator.userAgent.length * 2654435761) % 2147483647, 10) || 1; } catch (e) { seed = 1; }
-  function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
-  function noise(v, amp) { return v + (rnd() - 0.5) * (amp || 0.0001); }
-  try {
-    var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-    CanvasRenderingContext2D.prototype.getImageData = function () {
-      var data = origGetImageData.apply(this, arguments);
-      for (var i = 0; i < data.data.length; i += 997) data.data[i] = Math.max(0, Math.min(255, data.data[i] + (rnd() > 0.5 ? 1 : -1)));
-      return data;
-    };
-  } catch (e) {}
-  try {
-    var origParam = WebGLRenderingContext.prototype.getParameter;
-    WebGLRenderingContext.prototype.getParameter = function (p) {
-      if (p === 37445) return 'TiBrowser';
-      if (p === 37446) return 'TiBrowser Graphics';
-      return origParam.apply(this, arguments);
-    };
-  } catch (e) {}
-  try { Object.defineProperty(navigator, 'doNotTrack', { get: function () { return '1'; } }); } catch (e) {}
-  try { Object.defineProperty(navigator, 'hardwareConcurrency', { get: function () { return 4; } }); } catch (e) {}
-  try { Object.defineProperty(screen, 'colorDepth', { get: function () { return 24; } }); } catch (e) {}
-  try {
-    var origTz = Intl.DateTimeFormat.prototype.resolvedOptions;
-    Intl.DateTimeFormat.prototype.resolvedOptions = function () {
-      var o = origTz.apply(this, arguments);
-      if (o && o.timeZone) o.timeZone = 'UTC';
-      return o;
-    };
-  } catch (e) {}
-  void noise;
-})();
-)JS";
-  (void)script;
-  // 完整实现使用 CefRegisterExtension 在文档创建时注入；此处保留接口，避免误导为已生效。
-  Log("无痕模式 2.0：指纹改写配置已载入（注入在后续构建中启用）");
+  // 请求上下文只负责存储隔离（无痕不落盘）。
+  // 指纹改写是**页面级**的，由 PageClient 在每次主框架开始加载时注入 ——
+  // 早期版本在这里放了一段从不执行的注入代码，会造成"已实现"的错觉，故移除。
+  (void)context;
+  Log("无痕模式 2.0：已建立独立请求上下文（指纹改写由页面加载时注入）");
 }
 
 }  // namespace tib

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 # TiBrowser 原生外壳（Chromium / CEF）
-# 版本：v1.0.0-rc1 (build 260913)
+# 版本：v1.0.1-rc2 (build 260918)
 project(TiBrowser VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -49,8 +49,8 @@ find_package(CEF REQUIRED)
 add_subdirectory("${TIB_CEF_ROOT}/libcef_dll" "${CMAKE_CURRENT_BINARY_DIR}/libcef_dll")
 
 # 产品版本号：供「关于」页与窗口标题使用
-set(TIB_VERSION "1.0.0-rc1")
-set(TIB_BUILD "260913")
+set(TIB_VERSION "1.0.1-rc2")
+set(TIB_BUILD "260918")
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/src/version.h.in"
   "${CMAKE_CURRENT_BINARY_DIR}/generated/version.h"
@@ -68,6 +68,7 @@ add_executable(TiBrowser WIN32
   src/local_server.cpp
   src/store.cpp
   src/api.cpp
+  src/crx.cpp
   resources/tibrowser.rc   # 图标（来自根目录 ico.png）与版本信息
 )
 

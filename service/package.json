@@ -1,6 +1,6 @@
 {
   "name": "tib-service",
-  "version": "1.0.0-rc1",
+  "version": "1.0.1-rc2",
   "private": true,
   "type": "module",
   "description": "TiBrowser 边车服务（Node）：设置/密钥存储、书签历史、AI（OpenAI 兼容 + MCP + OAuth）、本地自动化 API、安全扫描与配置同步。",

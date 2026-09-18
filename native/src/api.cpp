@@ -10,6 +10,7 @@
 // 而不是永远转圈。
 #include "api.h"
 
+#include "crx.h"
 #include "local_server.h"
 #include "router.h"
 #include "security.h"
@@ -19,7 +20,12 @@
 
 #include <windows.h>
 
+#include <commdlg.h>
+#include <objbase.h>
+
+#include <commctrl.h>
 #include <shellapi.h>
+#include <shlobj.h>
 
 #include <algorithm>
 #include <map>
@@ -226,6 +232,33 @@ std::string AiModeJson() {
          "\"available\":false,\"note\":\"需要边车进程（未启动）\"},"
          "{\"id\":\"dev\",\"name\":\"本地开发\","
          "\"available\":false,\"note\":\"需要边车进程（未启动）\"}]}";
+}
+
+/**
+ * 读取扩展的 manifest.json，填充名称/版本/描述。
+ * 只解析顶层字符串字段，够用即可。
+ */
+void ReadExtensionManifest(const std::string& dir, ExtensionRecord& rec) {
+  const std::string json = ReadFileToString(dir + "\\manifest.json");
+  if (json.empty()) {
+    rec.name = rec.name.empty() ? "未命名的扩展" : rec.name;
+    rec.description = "缺少 manifest.json，无法读取扩展信息";
+    return;
+  }
+  CefRefPtr<CefValue> root = CefParseJSON(json, JSON_PARSER_RFC);
+  if (!root || root->GetType() != VTYPE_DICTIONARY) {
+    rec.name = "扩展（manifest 解析失败）";
+    return;
+  }
+  CefRefPtr<CefDictionaryValue> d = root->GetDictionary();
+  auto pick = [&](const char* key) -> std::string {
+    if (d->HasKey(key) && d->GetType(key) == VTYPE_STRING) return d->GetString(key).ToString();
+    return "";
+  };
+  rec.name = pick("name");
+  rec.version = pick("version");
+  rec.description = pick("description");
+  if (rec.name.empty()) rec.name = "未命名的扩展";
 }
 
 }  // namespace
@@ -472,9 +505,62 @@ std::string DispatchApi(TibWindow* window, const std::string& method,
     return "{\"ok\":true}";
   }
   if (method == "extensions.loadUnpacked" || method == "extensions.loadCrx") {
-    return "{\"__error\":" + Quote(
-               "扩展加载需要文件选择对话框，当前原生外壳尚未接入该对话框；"
-               "可以先把扩展目录路径写入设置后由下一版加载。") + "}";
+    const bool crx = (method == "extensions.loadCrx");
+    // 扩展加载必须由用户显式挑选文件/目录 —— 用原生对话框，不接受界面传路径
+    // （否则网页内容可以诱导加载任意本地路径，是个真实的安全问题）
+    char path[MAX_PATH] = {0};
+    if (crx) {
+      OPENFILENAMEA ofn{};
+      ofn.lStructSize = sizeof(ofn);
+      ofn.lpstrFilter = "Chrome 扩展包 (*.crx)\0*.crx\0所有文件\0*.*\0";
+      ofn.lpstrFile = path;
+      ofn.nMaxFile = MAX_PATH;
+      ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+      ofn.lpstrTitle = "选择 .crx 扩展包";
+      if (!::GetOpenFileNameA(&ofn)) {
+        return "{\"__error\":" + Quote("已取消选择扩展包") + "}";
+      }
+    } else {
+      BROWSEINFOA bi{};
+      bi.lpszTitle = "选择已解压的扩展目录（需包含 manifest.json）";
+      bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+      LPITEMIDLIST pidl = ::SHBrowseForFolderA(&bi);
+      if (!pidl) return "{\"__error\":" + Quote("已取消选择扩展目录") + "}";
+      const bool resolved = ::SHGetPathFromIDListA(pidl, path) != FALSE;
+      ::CoTaskMemFree(pidl);
+      if (!resolved) return "{\"__error\":" + Quote("无法解析所选目录路径") + "}";
+    }
+
+    const std::string chosen = path;
+    if (GetFileAttributesA(chosen.c_str()) == INVALID_FILE_ATTRIBUTES) {
+      return "{\"__error\":" + Quote("所选路径不存在：" + chosen) + "}";
+    }
+
+    // .crx 需要先解包成目录才能加载（Chromium 的 LoadExtension 只接受目录形式）
+    std::string load_dir = chosen;
+    if (crx) {
+      ::CreateDirectoryA((store.dir() + "\\extensions").c_str(), nullptr);
+      load_dir = store.dir() + "\\extensions\\" + NewId();
+      if (!::CreateDirectoryA(load_dir.c_str(), nullptr)) {
+        return "{\"__error\":" + Quote("无法创建扩展解包目录") + "}";
+      }
+      std::string unpack_error;
+      if (!UnpackCrx(chosen, load_dir, unpack_error)) {
+        return "{\"__error\":" + Quote("解包 .crx 失败：" + unpack_error) + "}";
+      }
+    }
+
+    ExtensionRecord rec;
+    rec.id = NewId();
+    rec.path = load_dir;
+    rec.enabled = true;
+    ReadExtensionManifest(load_dir, rec);
+    store.extensions.push_back(rec);
+    store.SaveExtensions();
+    if (window) window->SendExtensionsChanged(ExtensionsJson());
+    return "{\"id\":" + Quote(rec.id) + ",\"name\":" + Quote(rec.name) + ",\"version\":" +
+           Quote(rec.version) + ",\"path\":" + Quote(rec.path) +
+           ",\"enabled\":true,\"description\":" + Quote(rec.description) + "}";
   }
 
   // ---------- 账户与同步（feature 3） ----------
