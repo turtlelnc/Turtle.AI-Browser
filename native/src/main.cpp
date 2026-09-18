@@ -10,6 +10,7 @@
 
 #include <shlobj.h>
 
+#include <cstdarg>
 #include <fstream>
 
 #include "version.h"
@@ -25,14 +26,18 @@ namespace {
  * （network_service_instance_impl.cc:721 "Network service crashed" 反复刷屏），
  * 后果是**任何 HTTP 请求都发不出去**，页面永远空白，而导航事件与标题更新一切正常，
  * 极难排查。`--single-process` 可完全规避，代价是牺牲进程隔离。
+ *
+ * 注意：不能只看命令行开关来推断 —— `--single-process` 是我们在
+ * `OnBeforeCommandLineProcessing` 里**追加**的，属于 CEF 内部命令行，
+ * 用 `GetGlobalCommandLine()` 读原始命令行是看不到的（实测会误报成"标准多进程"）。
+ * 因此以 AppContext 里的决策为准。
  */
 std::string DetectProcessModel() {
-  CefRefPtr<CefCommandLine> cl = CefCommandLine::GetGlobalCommandLine();
-  if (!cl) return "标准（多进程 + 沙箱）";
-  if (cl->HasSwitch("single-process")) {
-    return "单进程兼容模式（--single-process，用于规避网络服务子进程崩溃，隔离性下降）";
+  if (tib::AppContext::Get().compat_single_process()) {
+    return "单进程兼容模式（规避网络服务子进程崩溃；渲染与网络都在浏览器进程内，隔离性下降）";
   }
-  if (cl->HasSwitch("no-sandbox")) return "多进程 + 已关闭沙箱（--no-sandbox）";
+  CefRefPtr<CefCommandLine> cl = CefCommandLine::GetGlobalCommandLine();
+  if (cl && cl->HasSwitch("no-sandbox")) return "多进程 + 已关闭沙箱（--no-sandbox）";
   return "标准（多进程 + 沙箱）";
 }
 
@@ -84,7 +89,118 @@ std::string LegacyUserDataDir() {
 
 }  // namespace
 
+// ---------------------------------------------------------------- 临时崩溃诊断
+//
+// 【排查用，定位到根因后应删除】崩溃发生在 libcef.dll 内部（0xc0000005，偏移恒定），
+// 日志里没有任何 FATAL 行，WER 事件只给出 libcef 里的偏移，无法知道是谁调用的。
+// 这里安装「最后机会」异常过滤器（只在本进程真要死时才触发，不影响正常路径），
+// 把出错线程、出错指令地址、访问违例地址、寄存器与调用栈（模块+偏移+本程序符号）
+// 用纯 Win32 文件 API 直接落盘 —— 不走 CRT/iostream，避免堆已损坏时二次卡死。
+#include <dbghelp.h>
+#include <strsafe.h>
+#pragma comment(lib, "dbghelp.lib")
+
+namespace {
+
+void CrashRawAppend(const char* text) {
+  const std::string path = tib::ExecutableDir() + "\\tibrowser-crash.log";
+  HANDLE file = ::CreateFileA(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return;
+  DWORD written = 0;
+  ::WriteFile(file, text, static_cast<DWORD>(strlen(text)), &written, nullptr);
+  ::CloseHandle(file);
+}
+
+void CrashRawPrintf(const char* fmt, ...) {
+  char buf[1024];
+  va_list ap;
+  va_start(ap, fmt);
+  ::StringCchVPrintfA(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  CrashRawAppend(buf);
+}
+
+/** 取模块基名（不带目录） */
+std::string CrashBaseName(const char* path) {
+  if (!path) return "?";
+  const char* slash = strrchr(path, '\\');
+  return slash ? std::string(slash + 1) : std::string(path);
+}
+
+LONG WINAPI TibCrashFilter(EXCEPTION_POINTERS* info) {
+  CrashRawAppend("\n===== 崩溃诊断 =====\n");
+  if (!info || !info->ExceptionRecord || !info->ContextRecord) {
+    CrashRawAppend("异常信息缺失\n");
+    return EXCEPTION_EXECUTE_HANDLER;
+  }
+  const EXCEPTION_RECORD* er = info->ExceptionRecord;
+  CONTEXT* ctx = info->ContextRecord;
+  CrashRawPrintf("异常码=0x%08X 出错指令=0x%p 线程=%lu\n", er->ExceptionCode,
+                 reinterpret_cast<void*>(er->ExceptionAddress), ::GetCurrentThreadId());
+  if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2) {
+    CrashRawPrintf("访问违例：%s 地址 0x%p\n",
+                   er->ExceptionInformation[0] == 0 ? "读取" : (er->ExceptionInformation[0] == 1 ? "写入" : "执行"),
+                   reinterpret_cast<void*>(er->ExceptionInformation[1]));
+  }
+  CrashRawPrintf("RIP=0x%llX RSP=0x%llX RBP=0x%llX RAX=0x%llX RBX=0x%llX RCX=0x%llX RDX=0x%llX\n",
+                 ctx->Rip, ctx->Rsp, ctx->Rbp, ctx->Rax, ctx->Rbx, ctx->Rcx, ctx->Rdx);
+
+  HANDLE process = ::GetCurrentProcess();
+  ::SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES | SYMOPT_NO_PROMPTS);
+  if (!::SymInitialize(process, nullptr, TRUE)) {
+    CrashRawPrintf("SymInitialize 失败，错误码 %lu\n", ::GetLastError());
+  }
+
+  STACKFRAME64 frame = {};
+  frame.AddrPC.Offset = ctx->Rip;
+  frame.AddrPC.Mode = AddrModeFlat;
+  frame.AddrFrame.Offset = ctx->Rbp;
+  frame.AddrFrame.Mode = AddrModeFlat;
+  frame.AddrStack.Offset = ctx->Rsp;
+  frame.AddrStack.Mode = AddrModeFlat;
+
+  CONTEXT walk = *ctx;
+  for (int i = 0; i < 48; ++i) {
+    if (!::StackWalk64(IMAGE_FILE_MACHINE_AMD64, process, ::GetCurrentThread(), &frame, &walk, nullptr,
+                       ::SymFunctionTableAccess64, ::SymGetModuleBase64, nullptr)) {
+      break;
+    }
+    if (frame.AddrPC.Offset == 0) break;
+    char symbol_buf[sizeof(SYMBOL_INFO) + 512] = {};
+    SYMBOL_INFO* symbol = reinterpret_cast<SYMBOL_INFO*>(symbol_buf);
+    symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+    symbol->MaxNameLen = 500;
+    DWORD64 disp = 0;
+    char line_info[256] = "";
+    IMAGEHLP_LINE64 line = {};
+    line.SizeOfStruct = sizeof(line);
+    DWORD line_disp = 0;
+    if (::SymGetLineFromAddr64(process, frame.AddrPC.Offset, &line_disp, &line)) {
+      ::StringCchPrintfA(line_info, sizeof(line_info), " (%s:%lu)", CrashBaseName(line.FileName).c_str(),
+                         line.LineNumber);
+    }
+    std::string symbol_name = ::SymFromAddr(process, frame.AddrPC.Offset, &disp, symbol) ? symbol->Name : "?";
+    IMAGEHLP_MODULE64 mod = {};
+    mod.SizeOfStruct = sizeof(mod);
+    std::string mod_name = "?";
+    DWORD64 mod_base = 0;
+    if (::SymGetModuleInfo64(process, frame.AddrPC.Offset, &mod)) {
+      mod_name = CrashBaseName(mod.ImageName);
+      mod_base = mod.BaseOfImage;
+    }
+    CrashRawPrintf("#%02d %s+0x%llX  %s+0x%llX%s\n", i, mod_name.c_str(), frame.AddrPC.Offset - mod_base,
+                   symbol_name.c_str(), disp, line_info);
+  }
+  ::SymCleanup(process);
+  CrashRawAppend("===== 诊断结束 =====\n");
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+
+}  // namespace
+
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
+  ::SetUnhandledExceptionFilter(TibCrashFilter);
   // 早期日志：在拿到 userData 目录之前就能落盘，便于排查启动即退出的问题
   const std::string early_log = tib::ExecutableDir() + "\\tibrowser-startup.log";
   auto early = [&](const std::string& msg) {

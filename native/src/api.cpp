@@ -192,12 +192,36 @@ std::string SettingsJson() {  const AppSettings& s = NativeStore::Get().settings
          ",\"serviceAutoStart\":" + (s.service_auto_start ? "true" : "false") + "}";
 }
 
+/**
+ * 快速模式在本机是否可用。
+ *
+ * 判据（有意保持简单可解释）：物理内存 ≥ 8 GB。快速模式靠更多渲染进程 + 预渲染换顺滑，
+ * 内存不足时反而拖慢整机 —— 这正是需求里"在部分设备上无法使用（自动识别能不能用）"的意思。
+ * 返回实际探测值，而不是写死 true，避免界面给出虚假承诺。
+ */
+bool FastModeSupported(std::string& reason) {
+  MEMORYSTATUSEX status{};
+  status.dwLength = sizeof(status);
+  if (!::GlobalMemoryStatusEx(&status)) {
+    reason = "无法读取本机内存信息，保守判定为不支持";
+    return false;
+  }
+  const unsigned long long total_gb = status.ullTotalPhys / (1024ull * 1024ull * 1024ull);
+  if (total_gb < 8) {
+    reason = "本机物理内存约 " + std::to_string(total_gb) +
+             " GB，快速模式（多渲染进程 + 预渲染）会明显吃内存，判定为不可用";
+    return false;
+  }
+  reason = "本机物理内存约 " + std::to_string(total_gb) + " GB，支持快速模式";
+  return true;
+}
+
 std::string EnergyJson() {
   const std::string mode = AppContext::Get().energy_mode();
-  // 四档说明与限制如实给出：fast 需要预加载，部分设备上不可用
-  const bool fast_supported = true;
+  std::string reason;
+  const bool fast_supported = FastModeSupported(reason);
   return "{\"mode\":" + Quote(mode) + ",\"fastSupported\":" +
-         (fast_supported ? "true" : "false") +
+         (fast_supported ? "true" : "false") + ",\"fastSupportedReason\":" + Quote(reason) +
          ",\"processModel\":" + Quote(ProcessModelJson()) +
          ",\"note\":\"能效模式在启动时生效；切换后需要重启浏览器才能完全应用\"}";
 }
