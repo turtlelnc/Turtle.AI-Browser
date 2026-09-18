@@ -98,12 +98,25 @@ AI 能力经边车进程打通，17/17 桥接接口可用。
     `RemoveChildView(旧视图) + AddChildView(新视图)`，会让被摘下视图底层的
     render widget / native window 被销毁，而 `CefBrowser` 仍然存活；
     此后任意一次对它的虚调用就是 AV 崩溃。
-    实测证据（崩溃处理器落盘）：`libcef+0x43208B0`，空对象虚调用（`RAX=0`，读偏移 `0xF0`），
-    崩在 UI 线程、调用栈自 `CefRunMessageLoop` 起。用 `--tib-legacy-detach` 打开旧行为
-    可稳定复现（2 标签页 2 秒内崩、切换场景 0.9 秒崩），关掉后 1/2/3 标签页各 60 秒稳定。
+    实测证据（崩溃处理器落盘到 `build-native/tibrowser-crash.log`）：
+    ```
+    异常码=0xC0000005  线程=UI 线程
+    访问违例：读取 地址 0x00000000000000F0
+    RIP=libcef+0x43208B0   RAX=0x0  RCX=0xF0        ← 空对象上的虚调用
+    #00 libcef+0x43208B0   #01 libcef+0x1FB2F38   #02 libcef+0x3AA929
+    #12 TiBrowser.exe+0x2EC6  wWinMain+0x1716       ← CefRunMessageLoop()
+    ```
     **正确做法：只切可见性（`SetVisible`），视图始终挂在窗口上。**
+    排查开关：`--tib-legacy-detach=create|activate|both` 可打开旧行为复现崩溃
+    （2 标签页 2 秒内崩、切换场景 0.9 秒崩），关掉后 1/2/3 标签页各 60 秒稳定。
 13. **`CefPostDelayedTask` 在本机不稳定**：同样的代码加上延迟任务后进程会退出，
     去掉后稳定存活 40 秒以上。定时逻辑（自检、兜底）请优先用别的方式实现。
+
+**崩溃诊断工具**：`native/src/main.cpp` 里装了「最后机会」异常过滤器
+（`CrashRawAppend` + dbghelp），在进程真要死时把出错线程、指令地址、访问违例地址、
+寄存器与调用栈写成 `build-native/tibrowser-crash.log`（纯 Win32 文件 API，
+不走 CRT/iostream，避免堆已损坏时二次卡死）。这个项目后面还会遇到 CEF 内部崩溃，
+有它就不必只靠 WER 事件猜偏移。
 
 ## 4. 本机环境特有的坑
 
