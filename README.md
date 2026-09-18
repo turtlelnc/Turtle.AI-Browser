@@ -152,6 +152,29 @@ npm run native:build
 npm run native:run
 ```
 
+### 打包与分发
+
+```bash
+npm run dist          # 组装免安装发行目录 → release/dist（约 417 MB）
+npm run native:setup  # 编译安装器 → build-installer/TiBrowserSetup.exe
+npm run check         # 发行一致性自检（版本号/许可证/产物/危险残留）
+```
+
+分发时把 `TiBrowserSetup.exe` 与 `dist/` 放在**同一个文件夹**里：
+
+```
+TiBrowser-1.0.1-rc2-win-x64/
+├── TiBrowserSetup.exe   # 双击安装（用户级，不需要管理员）
+└── dist/                # 程序本体（安装器的 payload）
+```
+
+安装器支持 `--silent`（静默）、`--dir=<路径>`（指定目录）、`--uninstall [--silent]`（卸载）。
+也可以完全跳过安装：直接把 `dist/` 复制到任意位置运行 `TiBrowser.exe`。
+
+> 安装器为自研实现（`installer/setup.cpp`）：本机没有 NSIS / Inno Setup / 7-Zip，
+> 且 winget 装包会卡在网络上，因此用 MSVC 工具链自带能力实现，依赖为零。
+> 未做代码签名，Windows SmartScreen 会提示"未知发布者"。
+
 其他可用脚本：`npm run ui:dev`（UI 热更新开发）、`npm run service:test`（边车自检）。
 
 > **镜像提示**：`ELECTRON_MIRROR` 那一套镜像配置**已经不再需要**——rc1 的浏览器主程序不依赖
@@ -167,24 +190,28 @@ npm run native:run
 
 ```
 Turtle.AI-Browser/
-├── native/                 # C++ 原生浏览器（CEF）：窗口/标签/tib:// 协议/安全/无痕/能效/边车通信
+├── native/                 # C++ 原生浏览器（CEF）：窗口/标签/本地 HTTP/安全/无痕/能效/边车通信
 │   ├── CMakeLists.txt
 │   ├── include/
 │   └── src/
+├── installer/              # 自研原生安装器（Win32 + Shell API，零外部依赖）
 ├── service/                # Node 边车：AI（API/MCP/OAuth）、存储、办公/开发模式、自动化 API
 │   └── src/
 ├── src/
 │   ├── shared/             # 三方共享类型与常量（唯一契约）
-│   ├── renderer/           # React 浏览器外壳 UI（tib://ui）
-│   └── legacy-electron/    # v0.1.0 的 Electron 实现，仅作只读参考
-├── resources/              # 黑名单、图标、内置页面
-├── docs/                   # 架构与接口文档
-├── scripts/                # 构建 / 取内核 / 打包脚本
-└── release/                # 最终用户使用的部分（安装包）
+│   ├── bootstrap/          # 注入脚本（window.tib 桥接）
+│   ├── renderer/           # React 浏览器外壳 UI
+│   └── main/ preload/      # v0.1.0 的 Electron 实现，已退役，仅作只读参考
+├── resources/              # 黑名单、诊断页、内置页面
+├── docs/                   # 架构、状态、接口文档
+├── scripts/                # 取内核 / 构建 / 打包 / 自检脚本
+└── release/                # 最终用户使用的部分（安装器与发行目录）
 ```
 
-> ⚠️ `src/legacy-electron/` 存放 **已退役的 v0.1.0 Electron 实现，仅供查阅参考**，
-> 不参与 rc1 的构建，也不要在此基础上改功能。
+> ⚠️ `src/main/` 与 `src/preload/` 存放 **已退役的 v0.1.0 Electron 实现，仅供查阅参考**，
+> 不参与 rc2 的构建，也不要在此基础上改功能。
+>
+> 📌 实现状态与踩过的坑见 [`docs/STATUS.md`](docs/STATUS.md) —— 改代码前建议先读它的 §3。
 
 ## ⚠️ 已知限制
 
