@@ -8,6 +8,8 @@ const ROOT = resolve(import.meta.dirname, '..')
 const CACHE = join(ROOT, '.cef-cache')
 const CEF_DEST = join(ROOT, 'third_party', 'cef')
 const BUILD = join(ROOT, 'build-native')
+/** 安装器独立构建目录（不依赖 CEF） */
+const BUILD_SETUP = join(ROOT, 'build-installer')
 
 /** MSVC / Windows SDK 环境（vcvars64.bat），用于让 cmake 找到 cl.exe */
 function findVcvars() {
@@ -57,7 +59,7 @@ const sdkVersion = pickSdkVersion()
  *  通过临时 .bat 文件调用（多层引号经 cmd /c 传递极易出错），并且 **只写纯 ASCII 内容**：
  *  本机用户名含中文（吴桥生），cmd 读取批处理文件用系统 ANSI 代码页，
  *  含中文的 .bat 会被解成乱码路径。路径一律通过环境变量传入（环境块是 UTF-16，不经过代码页转换）。 */
-function runInMsvcEnv(command, { cwd = ROOT, stdio = 'inherit' } = {}) {
+function runInMsvcEnv(command, { cwd = ROOT, stdio = 'inherit', env = {} } = {}) {
   const vcvars = findVcvars()
   if (!vcvars) {
     console.error('未找到 vcvars64.bat：请安装 Visual Studio 生成工具（含 C++ 生成工具 + Windows SDK）')
@@ -94,7 +96,8 @@ function runInMsvcEnv(command, { cwd = ROOT, stdio = 'inherit' } = {}) {
       TIB_BUILD: BUILD,
       TIB_CEF_ROOT: CEF_DEST,
       TIB_WINSDK: winsdkDir(),
-      TIB_SDKVER: sdkVersion
+      TIB_SDKVER: sdkVersion,
+      ...env
     }
   })
   return res.status ?? 1
@@ -169,8 +172,24 @@ function run() {
   child.on('exit', (code) => process.exit(code ?? 0))
 }
 
+/** 构建安装器（独立工程，不依赖 CEF）。
+ *  路径必须经环境变量传入：本机用户名含中文，含中文的 .bat 会被 cmd 按 ANSI 代码页解成乱码。 */
+function buildSetup() {
+  mkdirSync(BUILD_SETUP, { recursive: true })
+  // 配置与构建合并在同一次批处理里执行：分两次调用时第二次会报 "could not load cache"
+  // （两次各自起一个 cmd，构建目录与环境变量的关联会丢）。
+  const code = runInMsvcEnv(
+    'cmake -S "%TIB_INSTALLER%" -B "%TIB_BUILD_SETUP%" -G Ninja -DCMAKE_BUILD_TYPE=Release' +
+      ' && cmake --build "%TIB_BUILD_SETUP%" --parallel',
+    { env: { TIB_INSTALLER: join(ROOT, 'installer'), TIB_BUILD_SETUP: BUILD_SETUP } }
+  )
+  if (code !== 0) process.exit(code)
+  console.log(`安装器：${join(BUILD_SETUP, 'TiBrowserSetup.exe')}`)
+}
+
 const action = process.argv[2] ?? 'all'
-if (action === 'configure') configure()
+if (action === 'setup') buildSetup()
+else if (action === 'configure') configure()
 else if (action === 'build') build()
 else if (action === 'run') run()
 else {

@@ -132,6 +132,25 @@ console.log('\n3. 产物完整性')
   const svc = join(ROOT, 'service/dist/index.js')
   if (existsSync(svc)) ok('边车已构建', 'service/dist/index.js')
   else notes.push('边车尚未构建（AI 能力不可用，浏览器本身可用）')
+
+  const setup = join(ROOT, 'build-installer/TiBrowserSetup.exe')
+  if (existsSync(setup)) ok('安装器已构建', `${(statSync(setup).size / 1048576).toFixed(2)} MB`)
+  else notes.push('安装器尚未构建（npm run native:setup）')
+
+  const distDir = join(ROOT, 'release/dist')
+  if (existsSync(distDir)) {
+    const exe = join(distDir, 'TiBrowser.exe')
+    if (existsSync(exe)) ok('发行目录完整', 'release/dist/TiBrowser.exe')
+    else fail('发行目录缺少 TiBrowser.exe', '请重新执行 npm run dist')
+    // 安装器要求 payload 目录与自身同级
+    if (existsSync(join(ROOT, 'release/TiBrowserSetup.exe'))) {
+      ok('安装器已就位到 release/（与 dist 同级）')
+    } else {
+      notes.push('安装器未复制到 release/：分发时需与 dist/ 放在同一文件夹')
+    }
+  } else {
+    notes.push('尚未组装发行目录（npm run dist）')
+  }
 }
 
 // ---------------------------------------------------------------- 4. 危险残留

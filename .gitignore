@@ -41,3 +41,7 @@ npm-debug.log*
 # 发行目录（体积大，由 npm run dist 生成，不随源码入库）
 release/dist/
 
+
+# 安装器构建目录
+build-installer/
+
