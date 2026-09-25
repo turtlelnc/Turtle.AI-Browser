@@ -265,6 +265,16 @@ class TibWindow : public CefWindowDelegate, public CefBrowserViewDelegate {
   void Stop();
   void SetZoom(double level);
   void ToggleDevTools();
+  /** 阅读模式：向当前页面注入提取脚本 / 退出脚本（状态由页面回传报告更新） */
+  void ToggleReaderMode();
+  /** 页面回传的阅读模式状态（由 PageClient 调用） */
+  void OnReaderReport(const std::string& tab_id,
+                      bool active,
+                      int chars,
+                      int paragraphs,
+                      const std::string& title);
+  /** 主框架开始导航时清掉阅读状态（覆盖层随页面一起没了） */
+  void ResetReaderState(const std::string& tab_id);
   void Close();
 
   // ---- 外壳布局（供路由调用） ----

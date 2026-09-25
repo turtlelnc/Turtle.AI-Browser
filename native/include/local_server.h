@@ -33,6 +33,13 @@ std::string NewTabUrl();
 std::string DiagnosticProbeUrl();
 
 /**
+ * 验收用：一篇足够长的文章页（--tib-reader-probe 时作为首个标签页打开）。
+ * 页面里刻意混入导航 / 侧栏 / 广告 / 评论 / 页脚 / 脚本生成内容，
+ * 用来验证阅读模式的提取到底有没有做取舍，而不是把整页原样搬进覆盖层。
+ */
+std::string ArticleProbeUrl();
+
+/**
  * 验收用：会触发下载的探针地址。
  * 这个地址的响应带 Content-Disposition: attachment，导航过去必然走下载管线，
  * 于是"下载能落盘、能记进下载列表、能过安全判定"这三件事可以被自动化验证，

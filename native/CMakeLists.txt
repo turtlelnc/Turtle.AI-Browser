@@ -61,6 +61,7 @@ add_executable(TiBrowser WIN32
   src/app.cpp
   src/window.cpp
   src/context_menu.cpp
+  src/reader.cpp
   src/scheme.cpp
   src/router.cpp
   src/security.cpp

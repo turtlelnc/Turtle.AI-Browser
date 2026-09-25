@@ -349,6 +349,12 @@ std::string DiagnosticProbeUrl() {
          "/resources/diag/script-probe.html";
 }
 
+std::string ArticleProbeUrl() {
+  if (g_port == 0) return "";
+  return "http://127.0.0.1:" + std::to_string(g_port) + "/" + g_token +
+         "/resources/diag/article-probe.html";
+}
+
 std::string DownloadProbeUrl(const std::string& filename) {
   if (g_port == 0) return "";
   std::string url = "http://127.0.0.1:" + std::to_string(g_port) + "/" + g_token +

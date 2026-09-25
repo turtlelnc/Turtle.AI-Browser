@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>阅读模式探针 —— 一篇足够长的文章</title>
+    <style>
+      body { font: 16px/1.6 sans-serif; margin: 0; }
+      nav, aside, footer { background: #eee; padding: 8px; }
+      .promo { background: #ffe; }
+    </style>
+  </head>
+  <body>
+    <!-- 阅读模式验收用的页面：正文足够长，同时刻意混入大量"不该被提取"的内容
+         （导航、侧栏、广告、评论、页脚、脚本），用来验证提取是否真的做了取舍。 -->
+    <nav id="site-nav">
+      <a href="#">首页</a> <a href="#">分类</a> <a href="#">标签</a> <a href="#">关于</a>
+      <a href="#">订阅</a> <a href="#">登录</a> <a href="#">注册</a> <a href="#">更多</a>
+    </nav>
+
+    <div class="promo ad-banner">广告位：这里的内容不应该出现在阅读视图里。</div>
+
+    <main>
+      <article id="post">
+        <h1>Chromium 嵌入方案里的正文提取为什么难</h1>
+        <p>
+          这篇探针文章的唯一用途，是给阅读模式提供一段足够长的正文：提取脚本需要
+          至少两百个字符的正文才会认为"这个页面值得进入阅读模式"，否则它会明确放弃，
+          并回传一条中文原因。所以这里每一段都写得足够长，同时保证语义连贯，
+          便于人工抽查提取结果是否读得通。
+        </p>
+        <p>
+          第一件难事是"哪一块才是正文"。真实的网页里，正文容器可能叫 article，
+          也可能叫 main、content、post，甚至是一个没有任何语义标签的 div。
+          因此提取脚本不能依赖固定的选择器，只能给候选元素打分：段落文本越多分越高，
+          链接文本越多分越低 —— 导航栏、推荐位、列表页的链接密度远高于正文，
+          这条简单的规则在实践中相当有效。
+        </p>
+        <p>
+          第二件难事是"哪些东西必须剔掉"。侧边栏、评论、页脚、分享按钮、订阅框、
+          广告位、面包屑、分页器，都会混在正文容器内部。脚本对类名与 ID 里带有
+          nav、footer、comment、ad、share、related 等关键词的元素直接扣分或剔除，
+          同时把 script、style、iframe、form、button 这类元素整个移除。
+        </p>
+        <p>
+          第三件难事是"退出时必须干净"。阅读视图是一层覆盖在页面之上的容器，
+          退出时要把它整个移除，并把 document 的滚动状态恢复成进入前的样子。
+          如果这里出错，用户会看到一个再也关不掉的白色遮罩 —— 比不做阅读模式更糟。
+          因此进入时会把原先的 overflow 值记在覆盖层属性上，退出时按记录恢复。
+        </p>
+        <p>
+          最后一件难事是"状态要如实"。进入成功还是失败，不应该由浏览器自己宣布，
+          而应该由页面里的脚本把真实结果回传回来：提取到多少字符、多少个段落、
+          标题是什么。原生日志与验收脚本都以此为准，这样"功能坏了但界面显示正常"
+          这种假成功就不可能出现。
+        </p>
+        <p>
+          这一段是给长度兜底的：即便前面的段落因为排版或字体原因被判定为过短，
+          这里也保证页面里存在足够的连续文本，让提取脚本能够在任何合理的实现下
+          得到超过阈值的正文长度，从而稳定地进入阅读模式。
+        </p>
+      </article>
+    </main>
+
+    <aside class="sidebar">
+      <h3>侧边栏</h3>
+      <p>侧边栏里的这段文字不应该出现在阅读视图里，它的长度是为了确保按链接密度和类名规则都能被剔除。</p>
+    </aside>
+
+    <section id="comments">
+      <h3>评论（12）</h3>
+      <p>评论内容同样不该进入阅读视图，这里放一段足够长的文字，避免因为"太短"而被误判成正文段落。</p>
+    </section>
+
+    <footer>
+      <p>版权所有 · 这是一个探针页面，不包含任何真实内容，也不应该出现在阅读视图里。</p>
+    </footer>
+
+    <script>
+      // 脚本生成的段落也不该被提取（提取时会移除 script 元素）
+      document.addEventListener('DOMContentLoaded', function () {
+        var d = document.createElement('div');
+        d.textContent = '这段文字由脚本插入，用于确认 script 元素被整体移除。';
+        document.getElementById('comments').appendChild(d);
+      });
+    </script>
+  </body>
+</html>

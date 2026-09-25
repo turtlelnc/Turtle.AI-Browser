@@ -5,7 +5,7 @@
 import type { BookmarkNode, BrowserState } from '@shared/bridge'
 import { tib } from '../bridge'
 import { Omnibox } from './Omnibox'
-import { ArrowLeft, ArrowRight, Dots, Home, PanelRight, Reload, Stop } from './icons'
+import { ArrowLeft, ArrowRight, Doc, Dots, Home, PanelRight, Reload, Stop } from './icons'
 
 interface Props {
   state: BrowserState
@@ -50,6 +50,14 @@ export function Toolbar({ state, focusTick, bookmarks }: Props): JSX.Element {
 
       {active ? <Omnibox tab={active} bookmarks={bookmarks} focusTick={focusTick} /> : <span style={{ flex: 1 }} />}
 
+      <button
+        className={`nav-btn ${active?.readerActive ? 'on' : ''}`}
+        title={active?.readerActive ? '退出阅读模式（F9）' : '阅读模式（F9）'}
+        disabled={!active || active.isNewTab}
+        onClick={() => void tib.toggleReaderMode()}
+      >
+        <Doc size={17} />
+      </button>
       <button
         className={`nav-btn ${state.sidebarOpen ? 'on' : ''}`}
         title="AI 助手"

@@ -103,6 +103,7 @@ const METHOD_ALIASES: Record<string, string> = {
   stop: 'nav.stop',
   goHome: 'nav.home',
   setZoom: 'view.zoom',
+  toggleReaderMode: 'view.toggleReader',
   zoomIn: 'view.zoomIn',
   zoomOut: 'view.zoomOut',
   zoomReset: 'view.zoomReset',

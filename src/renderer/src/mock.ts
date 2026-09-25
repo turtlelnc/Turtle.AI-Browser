@@ -394,6 +394,15 @@ export function createMockBridge(): TibBridge {
       if (tab) patchTab(tab.id, { zoomLevel: level })
       return { ok: true }
     },
+    toggleReaderMode: async () => {
+      // mock 桥：状态立刻翻转，方便在浏览器里走查阅读按钮的两种外观
+      const tab = store.state.tabs.find((t) => t.id === store.state.activeTabId)
+      if (tab) {
+        const on = !tab.readerActive
+        patchTab(tab.id, { readerActive: on, readerChars: on ? 1200 : 0 })
+      }
+      return { ok: true }
+    },
     zoomIn: async () => {
       const tab = store.state.tabs.find((t) => t.id === store.state.activeTabId)
       if (tab) patchTab(tab.id, { zoomLevel: Math.min(5, tab.zoomLevel + 0.5) })

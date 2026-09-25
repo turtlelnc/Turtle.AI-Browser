@@ -247,6 +247,9 @@ RpcResult Dispatch(TibWindow* window, const std::string& method,
   if (method == "nav.home") { window->Navigate("https://www.bing.com"); return Ok(); }
   if (method == "view.zoom") { window->SetZoom(GetDoubleArg(args, "level", 0)); return Ok(); }
   if (method == "view.devtools") { window->ToggleDevTools(); return Ok(); }
+  // 阅读模式：切换是异步的（脚本注入后由页面回传结果），这里只确认"请求已发出"，
+  // 真正的状态以 state 事件里的 readerActive 为准 —— 不在这里假装已经切换成功。
+  if (method == "view.toggleReader") { window->ToggleReaderMode(); return Ok(); }
   if (method == "view.setOverlay") {
     const std::string name = GetStringArg(args, "name", "");
     window->SetOverlayOpen(!name.empty());

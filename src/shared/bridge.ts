@@ -422,6 +422,10 @@ export interface TabState {
   blocked?: { blocked: boolean; category: string | null; reason: string } | null
   /** 缩放级别（Chromium zoom level） */
   zoomLevel: number
+  /** 是否处于阅读模式（由页面回传的报告更新，导航后自动为 false） */
+  readerActive?: boolean
+  /** 阅读模式提取到的正文字符数（0 表示未进入） */
+  readerChars?: number
 }
 
 /** 搜索结果类型（下拉联想） */
@@ -619,6 +623,11 @@ export interface TibBridge {
   stop(): Promise<OkResult>
   goHome(): Promise<OkResult>
   setZoom(level: number): Promise<OkResult>
+  /**
+   * 阅读模式开关（F9 同效）。返回只代表"请求已发出"：
+   * 正文提取在页面里异步完成，真正的状态看 state 里的 `readerActive`。
+   */
+  toggleReaderMode(): Promise<OkResult>
   zoomIn(): Promise<OkResult>
   zoomOut(): Promise<OkResult>
   zoomReset(): Promise<OkResult>

@@ -3,6 +3,7 @@
 
 #include "context_menu.h"
 #include "local_server.h"
+#include "reader.h"
 #include "router.h"
 #include "scheme.h"
 #include "store.h"
@@ -176,6 +177,29 @@ constexpr char kFingerprintProbeScript[] = R"JS(
 })();
 )JS";
 
+/**
+ * 阅读模式自检任务（--tib-reader-probe）：到点后切一次阅读模式。
+ * 状态是否真的切换由页面回传的 __TIB_READER__ 报告决定，
+ * 这个任务不自己宣布成功（否则就等于在测试里自证）。
+ * 注意：任务里访问 TibWindow 的私有成员，因此它是 TibWindow 的友元式内部类 ——
+ * 用 CefRefPtr 保活窗口，避免延迟执行时窗口已销毁（这个坑踩过一次，见 UiProbeTask）。
+ */
+class ReaderProbeTask : public CefTask {
+ public:
+  ReaderProbeTask(CefRefPtr<TibWindow> window, bool enter)
+      : window_(std::move(window)), enter_(enter) {}
+  void Execute() override {
+    if (!window_) return;
+    Log(std::string("阅读模式自检：") + (enter_ ? "触发进入" : "触发退出"));
+    window_->ToggleReaderMode();
+  }
+
+ private:
+  CefRefPtr<TibWindow> window_;
+  bool enter_;
+  IMPLEMENT_REFCOUNTING(ReaderProbeTask);
+};
+
 }  // namespace
 
 struct TibWindow::Tab {
@@ -187,6 +211,9 @@ struct TibWindow::Tab {
   std::string pending_url;
   /** 是否已经发起过首次导航（该回调会触发两次，避免重复导航） */
   bool navigated = false;
+  /** 阅读模式是否开启（由页面回传的报告更新，导航时清掉） */
+  bool reader_active = false;
+  int reader_chars = 0;
 };
 
 // ---------------------------------------------------------------- 标签页
@@ -458,6 +485,11 @@ bool TibWindow::HandleShortcut(bool ctrl, bool shift, bool alt, int key_code) {
       ToggleDevTools();
       return true;
     }
+    // F9：阅读模式（与 Edge 的阅读视图快捷键一致）
+    if (key_code == VK_F9) {
+      ToggleReaderMode();
+      return true;
+    }
     return false;
   }
 
@@ -652,6 +684,56 @@ void TibWindow::ToggleDevTools() {
   b->GetHost()->ShowDevTools(info, nullptr, settings, CefPoint());
 }
 
+// ---------------------------------------------------------------- 阅读模式
+
+void TibWindow::ToggleReaderMode() {
+  CefRefPtr<CefBrowser> b = active_page();
+  if (!b || !b->GetMainFrame()) {
+    Log("阅读模式：当前没有可用的页面");
+    return;
+  }
+  const auto it = std::find_if(tabs_.begin(), tabs_.end(),
+                               [&](const std::shared_ptr<Tab>& t) { return t->id == active_id_; });
+  if (it == tabs_.end()) return;
+  const bool active = (*it)->reader_active;
+  const std::string script = active ? ReaderExitScript() : ReaderEnterScript();
+  Log(std::string("阅读模式：") + (active ? "请求退出" : "请求进入") + "（注入脚本 " +
+      std::to_string(script.size()) + " 字节）");
+  CefRefPtr<CefFrame> frame = b->GetMainFrame();
+  frame->ExecuteJavaScript(script, frame->GetURL(), 0);
+}
+
+void TibWindow::OnReaderReport(const std::string& tab_id,
+                               bool active,
+                               int chars,
+                               int paragraphs,
+                               const std::string& title) {
+  const auto it = std::find_if(tabs_.begin(), tabs_.end(),
+                               [&](const std::shared_ptr<Tab>& t) { return t->id == tab_id; });
+  if (it == tabs_.end()) return;
+  (*it)->reader_active = active;
+  (*it)->reader_chars = chars;
+  SyncState();
+  if (active) {
+    // 标题也记下来：它能证明提取到的是**文章正文所在的那一块**，
+    // 而不是把整页（导航/侧栏/评论/页脚）原样搬进覆盖层。
+    Log("阅读模式：已进入（标题=" + (title.empty() ? "(无)" : title) + "，正文 " +
+        std::to_string(chars) + " 字符、" + std::to_string(paragraphs) + " 段）");
+  } else {
+    Log("阅读模式：已退出，页面恢复原样");
+  }
+}
+
+void TibWindow::ResetReaderState(const std::string& tab_id) {
+  const auto it = std::find_if(tabs_.begin(), tabs_.end(),
+                               [&](const std::shared_ptr<Tab>& t) { return t->id == tab_id; });
+  if (it == tabs_.end() || !(*it)->reader_active) return;
+  // 覆盖层是页面 DOM 的一部分，导航后自然消失；这里只同步状态，避免按钮显示成"仍在阅读"
+  (*it)->reader_active = false;
+  (*it)->reader_chars = 0;
+  SyncState();
+}
+
 void TibWindow::Close() {
   if (window_) window_->Close();
 }
@@ -765,6 +847,8 @@ std::string TibWindow::GetStateJson() {
     t->SetBool("isNewTab", info.is_new_tab);
     t->SetBool("incognito", incognito_);
     t->SetDouble("zoomLevel", info.zoom);
+    t->SetBool("readerActive", tabs_[i]->reader_active);
+    t->SetInt("readerChars", tabs_[i]->reader_chars);
     if (info.blocked) {
       CefRefPtr<CefDictionaryValue> verdict = CefDictionaryValue::Create();
       verdict->SetBool("blocked", true);
@@ -1092,6 +1176,15 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
       first_tab_url = probe;
     }
   }
+  // 阅读模式自检：首个标签页换成长文章探针（没有内容可提取的页面测不出东西）
+  if (CefCommandLine::GetGlobalCommandLine() &&
+      CefCommandLine::GetGlobalCommandLine()->HasSwitch("tib-reader-probe")) {
+    const std::string probe = ArticleProbeUrl();
+    if (!probe.empty()) {
+      Log("阅读模式自检：首个标签页改为文章探针 " + probe);
+      first_tab_url = probe;
+    }
+  }
   // 首个标签页：命令行给了 --url= 就直接打开，否则新标签页。
   Log("OnWindowCreated: 创建首个标签页");
   // 注意：不能传空串。空串会让 navigator 根本不发生，标签页停在 about:blank，
@@ -1186,6 +1279,16 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
     const bool show = (mode == "show");
     Log(std::string("实验：3 秒后执行右键菜单自检") + (show ? "（含真实弹出）" : "（只构造不弹出）"));
     ScheduleContextMenuSelfTest(this, show);
+  }
+
+  // 【诊断开关】--tib-reader-probe：5 秒后进入阅读模式、12 秒后再退出。
+  // 必要性：阅读模式要按 F9 或点按钮才能触发，自动化里没有按键；这个开关让
+  // "能不能提取出正文、能不能干净退出"可以被日志证明。
+  if (CefCommandLine::GetGlobalCommandLine() &&
+      CefCommandLine::GetGlobalCommandLine()->HasSwitch("tib-reader-probe")) {
+    Log("实验：5 秒后进入阅读模式，12 秒后退出");
+    CefPostDelayedTask(TID_UI, new ReaderProbeTask(this, true), 5000);
+    CefPostDelayedTask(TID_UI, new ReaderProbeTask(this, false), 12000);
   }
 
   // 外壳 UI 的唯一加载入口：必须在这里（OnWindowCreated 末尾、视图已挂载之后）。
@@ -1449,12 +1552,16 @@ bool ChromeClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,              
   (void)source;
   (void)line;
   const std::string text = message.ToString();
-  // 诊断：确认 console 通道本身是通的（页面里任何一条日志都会走到这里）
+  // 宿主调用的回声不再重复打印：每一条 __TIB_CALL__ 都会在 HandleHostCall 里
+  // 记一行"方法=… 结果=…"，这里再打印一遍会让日志翻倍（排查时反而更难读）。
+  if (text.rfind(kHostCallPrefix, 0) == 0) {
+    HandleHostCall(window_ ? window_->chrome_browser() : nullptr,
+                   text.substr(sizeof(kHostCallPrefix) - 1));
+    return true;
+  }
+  // 诊断：确认 console 通道本身是通的（页面里其它日志都会走到这里）
   Log("UI console[" + std::to_string(static_cast<int>(level)) + "]: " + text.substr(0, 300));
-  if (text.rfind(kHostCallPrefix, 0) != 0) return false;
-  HandleHostCall(window_ ? window_->chrome_browser() : nullptr,
-                 text.substr(sizeof(kHostCallPrefix) - 1));
-  return true;  // 已消费，不再打印到日志
+  return false;
 }
 
 void ChromeClient::SendEvent(const std::string& name, CefRefPtr<CefValue> payload) {
@@ -1542,6 +1649,9 @@ void PageClient::OnLoadStart(CefRefPtr<CefBrowser> browser,
   (void)browser;
   (void)transition_type;
   if (!frame || !frame->IsMain()) return;
+  // 阅读模式的覆盖层是页面 DOM 的一部分，一导航就没了 —— 状态要同步清掉，
+  // 否则工具栏上的阅读按钮会一直显示成"正在阅读"。
+  if (window_) window_->ResetReaderState(tab_id_);
 
   // 无痕模式 2.0：在主框架开始加载时注入指纹改写脚本。
   // 只在无痕窗口注入 —— 普通窗口保持真实指纹，否则会破坏正常的站点登录与风控。
@@ -1799,6 +1909,25 @@ bool PageClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
   (void)source;
   (void)line;
   const std::string text = message.ToString();
+
+  // 阅读模式报告：页面提取完正文后回传结果，由原生侧记日志并更新标签状态
+  if (text.rfind(kReaderPrefix, 0) == 0) {
+    ReaderReport report;
+    const std::string json = text.substr(sizeof(kReaderPrefix) - 1);
+    if (!ParseReaderReport(json, report)) {
+      Log("阅读模式：报告解析失败（原始内容 " + json.substr(0, 160) + "）");
+      return true;
+    }
+    if (!report.ok) {
+      Log("阅读模式：未能进入 —— " + (report.error.empty() ? "页面未给出原因" : report.error));
+      return true;
+    }
+    if (window_) {
+      window_->OnReaderReport(tab_id_, report.active, report.chars, report.paragraphs, report.title);
+    }
+    return true;
+  }
+
   constexpr char kProbePrefix[] = "__TIB_FP__";
   if (text.rfind(kProbePrefix, 0) != 0) return false;
 
