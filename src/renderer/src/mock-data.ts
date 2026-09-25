@@ -291,7 +291,7 @@ export const MOCK_SERVICE: ServiceStatus = {
   running: true,
   mode: '本地边车（Node 20）',
   port: 49810,
-  version: '1.0.0-rc1',
+  version: '1.0.1-rc2',
   capabilities: ['ai', 'store', 'sync', 'automation']
 }
 
@@ -305,12 +305,12 @@ export const MOCK_HISTORY: HistoryItem[] = [
 export const MOCK_DOWNLOADS: DownloadItem[] = [
   {
     id: 'd1',
-    filename: 'tibrowser-setup-1.0.0-rc1.exe',
-    url: 'https://turtleweb.cc.cd/download/tibrowser-setup-1.0.0-rc1.exe',
+    filename: 'tibrowser-setup-1.0.1-rc2.exe',
+    url: 'https://turtleweb.cc.cd/download/tibrowser-setup-1.0.1-rc2.exe',
     receivedBytes: 48_200_000,
     totalBytes: 48_200_000,
     state: 'completed',
-    savePath: 'C:\\Users\\Public\\Downloads\\tibrowser-setup-1.0.0-rc1.exe',
+    savePath: 'C:\\Users\\Public\\Downloads\\tibrowser-setup-1.0.1-rc2.exe',
     mimeType: 'application/octet-stream'
   },
   {

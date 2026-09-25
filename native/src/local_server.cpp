@@ -92,13 +92,14 @@ void SendAll(SOCKET s, const std::string& data) {
 }
 
 void SendResponse(SOCKET s, int status, const std::string& status_text, const std::string& mime,
-                  const std::string& body) {
+                  const std::string& body, const std::string& extra_headers = "") {
   std::ostringstream head;
   head << "HTTP/1.1 " << status << " " << status_text << "\r\n"
        << "Content-Type: " << mime << "\r\n"
        << "Content-Length: " << body.size() << "\r\n"
        << "Cache-Control: no-store\r\n"
        << "X-Content-Type-Options: nosniff\r\n"
+       << extra_headers
        << "Connection: close\r\n\r\n";
   SendAll(s, head.str());
   SendAll(s, body);
@@ -206,6 +207,28 @@ void HandleClient(SOCKET client) {
   }
   if (!allowed) {
     SendResponse(client, 404, "Not Found", "text/plain; charset=utf-8", "未找到资源");
+    return;
+  }
+
+  // 下载探针：不落磁盘，直接给一个带 attachment 的响应（验收用，见 DownloadProbeUrl）
+  if (rel == "resources/diag/download-probe.bin") {
+    // 文件名可由查询串指定（只允许字母数字与 . - _，避免把路径分隔符带进 Content-Disposition）
+    std::string name = "tib-download-probe.bin";
+    const size_t q = target.find("?name=");
+    if (q != std::string::npos) {
+      std::string requested = PercentDecode(target.substr(q + 6));
+      std::string safe;
+      for (char ch : requested) {
+        const bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                        (ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '_';
+        if (ok) safe.push_back(ch);
+      }
+      if (!safe.empty()) name = safe;
+    }
+    const std::string body = "TiBrowser 下载探针内容（仅用于验收，无实际用途）\n";
+    Log("本地服务器 200：下载探针 " + name + "（Content-Disposition: attachment）");
+    SendResponse(client, 200, "OK", "application/octet-stream", body,
+                 "Content-Disposition: attachment; filename=\"" + name + "\"\r\n");
     return;
   }
 
@@ -324,6 +347,14 @@ std::string DiagnosticProbeUrl() {
   if (g_port == 0) return "";
   return "http://127.0.0.1:" + std::to_string(g_port) + "/" + g_token +
          "/resources/diag/script-probe.html";
+}
+
+std::string DownloadProbeUrl(const std::string& filename) {
+  if (g_port == 0) return "";
+  std::string url = "http://127.0.0.1:" + std::to_string(g_port) + "/" + g_token +
+                    "/resources/diag/download-probe.bin";
+  if (!filename.empty()) url += "?name=" + filename;
+  return url;
 }
 
 }  // namespace tib

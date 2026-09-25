@@ -5,7 +5,7 @@
  * 只要读取 `<userData>/automation.json` 即可拿到地址与 token：
  * ```json
  * { "enabled": true, "baseUrl": "http://127.0.0.1:51234/automation", "wsUrl": "ws://127.0.0.1:51234/automation-ws",
- *   "token": "...", "version": "1.0.0-rc1", "build": 260913 }
+ *   "token": "...", "version": "1.0.1-rc2", "build": 260918 }
  * ```
  * **默认关闭**（`automation.enabled=false`）：关闭时也会写文件，但 `enabled:false`
  * 且**不写入 token**，避免 token 在用户不知情时外泄给本机其它程序。

@@ -1,5 +1,5 @@
 // TiBrowser 原生外壳入口（Chromium / CEF）
-// 版本：v1.0.0-rc1 (build 260913)
+// 版本：v1.0.1-rc2 (build 260918)
 #include "app.h"
 #include "local_server.h"
 #include "security.h"
@@ -250,25 +250,45 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
   //   * 默认启用单进程兼容模式，保证"能上网"这个最基本的能力；
   //   * 提供 --multi-process 显式退出，便于在正常环境里恢复完整隔离；
   //   * 两种模式都会在启动日志里如实标注，不假装是标准隔离模式。
+  //
+  // 注意：这一段必须在拿到 command_line 之后（见下方），否则 `--multi-process`
+  // 会因为 GetGlobalCommandLine() 返回空而被忽略 —— 与 --user-data-dir 同一类坑。
+
+  // 命令行解析的位置有讲究，这里曾经踩过一个静默失效的坑：
+  //   `CefCommandLine::GetGlobalCommandLine()` 在 **CefInitialize 之前会返回空**，
+  //   而 `--user-data-dir` 的解析原本写在下面（用全局命令行），于是这个开关一直没生效 ——
+  //   日志里会打印"生效的命令行开关：--user-data-dir=..."，但"用户数据目录"仍是默认值。
+  //   现在改为：先取全局命令行，取不到就用原始命令行构造，再做所有开关解析。
+  CefRefPtr<CefCommandLine> command_line = CefCommandLine::GetGlobalCommandLine();
+  if (!command_line) {
+    command_line = CefCommandLine::CreateCommandLine();
+    command_line->InitFromString(::GetCommandLineW());
+  }
+
+  // 兼容模式决策（原因见上方注释；必须在 command_line 就绪之后执行）
   {
-    CefRefPtr<CefCommandLine> cl = CefCommandLine::GetGlobalCommandLine();
-    const bool force_multi = cl && cl->HasSwitch("multi-process");
-    if (!force_multi && !(cl && cl->HasSwitch("single-process"))) {
+    const bool force_multi = command_line->HasSwitch("multi-process");
+    const bool force_single = command_line->HasSwitch("single-process");
+    if (force_multi) {
+      ctx.set_compat_single_process(false);
+      early("按命令行关闭单进程兼容模式（--multi-process），使用标准多进程模型");
+    } else if (!force_single) {
       ctx.set_compat_single_process(true);
       early("网络服务子进程在本机不可用，已自动启用单进程兼容模式（可用 --multi-process 关闭）");
+    } else {
+      ctx.set_compat_single_process(true);
+      early("按命令行启用单进程兼容模式（--single-process）");
     }
   }
 
   // 注意：CEF 不会自动处理 Chromium 的 --user-data-dir（那是 Chrome 的约定），
   // 必须自己解析并同时用于 CefSettings。这个开关对排查"旧 profile 损坏"
   // （缓存文件被占用、网络服务反复崩溃）至关重要。
-  {
-    CefRefPtr<CefCommandLine> cl = CefCommandLine::GetGlobalCommandLine();
-    if (cl && cl->HasSwitch("user-data-dir")) {
-      const std::string custom = cl->GetSwitchValue("user-data-dir").ToString();
-      if (!custom.empty()) {
-        ctx.set_user_data_dir(custom);
-      }
+  if (command_line->HasSwitch("user-data-dir")) {
+    const std::string custom = command_line->GetSwitchValue("user-data-dir").ToString();
+    if (!custom.empty()) {
+      ctx.set_user_data_dir(custom);
+      early("按命令行切换用户数据目录：" + custom);
     }
   }
   early("程序目录 " + ctx.app_dir());
@@ -278,11 +298,6 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
   // 注意：这里必须使用 CEF 自己的命令行对象（GetGlobalCommandLine），
   // 而不是自行 InitFromString 新建一个——后者不含 CEF 注入的内部开关，
   // 会导致子进程判定与部分初始化路径走偏。
-  CefRefPtr<CefCommandLine> command_line = CefCommandLine::GetGlobalCommandLine();
-  if (!command_line) {
-    command_line = CefCommandLine::CreateCommandLine();
-    command_line->InitFromString(::GetCommandLineW());
-  }
   if (command_line->HasSwitch("incognito")) {
     ctx.set_incognito(true);
   }

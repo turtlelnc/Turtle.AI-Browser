@@ -32,6 +32,16 @@ std::string NewTabUrl();
 /** 诊断用：脚本执行探针页的地址（--diag 时由原生自动打开） */
 std::string DiagnosticProbeUrl();
 
+/**
+ * 验收用：会触发下载的探针地址。
+ * 这个地址的响应带 Content-Disposition: attachment，导航过去必然走下载管线，
+ * 于是"下载能落盘、能记进下载列表、能过安全判定"这三件事可以被自动化验证，
+ * 而不必依赖外网某个真实的下载链接。
+ * @param filename 期望的落盘文件名（留空为 tib-download-probe.bin）；
+ *                 用 setup.exe 这类名字可以验证"不安全安装包只警告不拦截"。
+ */
+std::string DownloadProbeUrl(const std::string& filename = "");
+
 /** 宿主注入脚本内容（内联进 HTML 的 window.tib / __tibHost） */
 std::string HostBridgeScript();
 

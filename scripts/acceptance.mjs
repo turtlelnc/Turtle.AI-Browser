@@ -59,19 +59,28 @@ async function waitNoProcess(seconds = 20) {
 
 /** 稳健清理数据目录：最多重试 20 次，每次给系统 300ms 释放句柄 */
 function purgeUserData() {
+  return purgeDir(USER_DATA)
+}
+
+/**
+ * 稳健删除任意目录（Chromium 释放文件句柄有延迟，紧接着删会 EPERM）。
+ * 用例 10 用它清理 `--user-data-dir` 的临时目录 —— 第一版直接 rmSync，结果在
+ * 杀进程之后立刻删就吃了一个 EPERM，把整个用例带崩。
+ */
+function purgeDir(dir) {
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
-      rmSync(USER_DATA, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 })
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 })
       return true
     } catch {
       spawnSync('powershell', [
         '-NoProfile',
         '-Command',
-        `Start-Sleep -Milliseconds 300; Remove-Item -LiteralPath '${USER_DATA}' -Recurse -Force -ErrorAction SilentlyContinue`
+        `Start-Sleep -Milliseconds 300; Remove-Item -LiteralPath '${dir}' -Recurse -Force -ErrorAction SilentlyContinue`
       ], { stdio: 'ignore' })
     }
   }
-  return !existsSync(USER_DATA)
+  return !existsSync(dir)
 }
 
 function readLog() {
@@ -87,6 +96,16 @@ function readStartupLog() {
     return readFileSync(STARTUP_LOG, 'utf8')
   } catch {
     return ''
+  }
+}
+
+/** 读取下载列表（不存在或损坏时返回空数组，让断言自己给出"未找到下载记录"） */
+function readDownloads() {
+  try {
+    const parsed = JSON.parse(readFileSync(join(USER_DATA, 'downloads.json'), 'utf8'))
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
   }
 }
 
@@ -187,13 +206,39 @@ if (want(3)) {
 }
 
 // ---------------------------------------------------------------- 用例 4：无痕
-console.log('\n用例 4：无痕模式')
+console.log('\n用例 4：无痕模式（含指纹改写是否真的对页面生效）')
 if (want(4)) {
-  const r = await runCase('incognito', ['--incognito', '--url=https://example.com'], 35)
+  // 预置一份与真实机器明显不同的指纹画像，用来证明"页面上读到的值确实被改写了"：
+  // 系统语言/时区/核心数都不可能恰好是下面这几个值，因此比对结果不会假阳性。
+  const profile = {
+    userAgent: '跟随系统',
+    platform: '跟随系统',
+    timezone: 'Asia/Tokyo',
+    language: 'en-GB',
+    screen: '2560x1440',
+    hardwareConcurrency: '4',
+    doNotTrack: '1',
+    canvasNoise: true,
+    webglNoise: true
+  }
+  const { writeFileSync } = await import('node:fs')
+  const r = await runCase('incognito', ['--incognito', '--url=https://example.com'], 35, () => {
+    writeFileSync(join(USER_DATA, 'fingerprint.json'), JSON.stringify(profile), 'utf8')
+  })
   check('以无痕窗口启动', r.log.includes('创建主窗口：无痕窗口'))
   check('注入指纹改写脚本', /向页面注入指纹改写脚本（\d+ 字节）/.test(r.log))
   check('无痕不记录历史', !existsSync(join(USER_DATA, 'history.json')))
   check('进程存活', r.survived >= 25, `实际 ${r.survived}s`)
+
+  // 关键证据：页面里回读到的值。只证明"注入了一段脚本"是不够的。
+  check('页面回读指纹成功', /无痕指纹回读：[^\n]*语言=一致\(en-GB\)/.test(r.log))
+  check('时区改写对页面生效', /时区=一致\(Asia\/Tokyo\)/.test(r.log))
+  check('并发数改写对页面生效', /核心数=一致\(4\)/.test(r.log))
+  const compare = /无痕指纹比对：一致 (\d+) 项、跟随系统 (\d+) 项、不一致 (\d+) 项/.exec(r.log)
+  check('改写项全部生效（不一致 0 项）', compare && compare[3] === '0',
+    compare ? `一致 ${compare[1]}、跟随系统 ${compare[2]}、不一致 ${compare[3]}` : '未找到比对结论')
+  check('未改写的项保持跟随系统', compare && compare[2] === '2',
+    compare ? `跟随系统 ${compare[2]} 项（UA / 平台）` : '未找到比对结论')
 }
 
 // ---------------------------------------------------------------- 用例 5：设置持久化
@@ -259,6 +304,112 @@ if (want(6)) {
     log.includes('收尾完成，进程退出') || startupLog.includes('收尾完成，进程退出'),
     startupLog.includes('收尾完成，进程退出') ? '（早期日志）' : ''
   )
+  killAll()
+  await waitNoProcess()
+}
+
+// ---------------------------------------------------------------- 用例 7：右键菜单
+console.log('\n用例 7：网页右键菜单（只能由人右键触发的功能，用自检开关验证）')
+if (want(7)) {
+  const r = await runCase('menu', ['--tib-menu-probe', '--url=https://example.com'], 25)
+  check('菜单自检已执行', /右键菜单自检：合成上下文（链接\+图片\+可编辑\+有选区）构造出 \d+ 项/.test(r.log))
+  check('含导航与链接条目', r.log.includes('在新标签页中打开链接') && r.log.includes('复制链接地址'))
+  check('含图片条目', r.log.includes('图片另存为…') && r.log.includes('复制图片地址'))
+  check('含编辑条目', r.log.includes('粘贴') && r.log.includes('全选'))
+  check('含缩放与页面动作', r.log.includes('重置为 100%') && r.log.includes('打印为 PDF…'))
+  check('禁用状态按上下文设置', /右键菜单自检：可用性判断 正确/.test(r.log))
+  check('菜单自检后进程仍存活', r.survived >= 18, `实际 ${r.survived}s`)
+}
+
+// ---------------------------------------------------------------- 用例 8：下载与下载安全判定
+console.log('\n用例 8：下载落盘、记入列表、并过一遍安全判定')
+if (want(8)) {
+  const probeFile = join(USER_DATA, 'Downloads', 'tib-download-probe.bin')
+  const r = await runCase('download', ['--tib-download-probe', '--url=https://example.com'], 30)
+  const downloads = readDownloads()
+  const record = downloads.find((d) => d.filename === 'tib-download-probe.bin')
+  check('下载探针标签页已打开', /实验：打开下载探针标签页 http:\/\/127\.0\.0\.1:\d+/.test(r.log))
+  check('下载开始', /下载开始[^\n]*tib-download-probe\.bin/.test(r.log))
+  check('下载完成', /下载完成：[^\n]*tib-download-probe\.bin/.test(r.log))
+  check('文件已真正落盘', existsSync(probeFile))
+  check('已记入下载列表且状态为已完成', record && record.state === 'completed',
+    record ? `state=${record.state} 字节=${record.totalBytes}` : '未找到下载记录')
+  check('普通文件未被误标为可疑', record && record.suspicious === false)
+}
+
+// ---------------------------------------------------------------- 用例 9：不安全安装包只警告不拦截
+console.log('\n用例 9：不安全安装包可保留（需求 6：警告但不拦截，且写清原因）')
+if (want(9)) {
+  const exeName = 'tib-unsafe-probe-setup.exe'
+  const probeFile = join(USER_DATA, 'Downloads', exeName)
+  const r = await runCase('unsafe', ['--tib-download-probe=' + exeName, '--url=https://example.com'], 30)
+  const record = readDownloads().find((d) => d.filename === exeName)
+  check('命中不安全安装包判定', /已标记为可疑，可自行保留/.test(r.log))
+  check('给出了中文原因', /原因：这是可执行安装包/.test(r.log))
+  check('没有被拦截（文件保留）', existsSync(probeFile))
+  check('下载记录标为可疑并带原因', record && record.suspicious === true && !!record.suspiciousReason,
+    record ? `suspicious=${record.suspicious}` : '未找到下载记录')
+  check('仍然完成了下载', record && record.state === 'completed',
+    record ? `state=${record.state}` : '未找到下载记录')
+}
+
+// ---------------------------------------------------------------- 用例 10：命令行开关真的生效
+console.log('\n用例 10：命令行开关（--user-data-dir / --multi-process）必须真的生效')
+if (want(10)) {
+  // 为什么单独一个用例：这两个开关曾经都因为"在 CefInitialize 之前调用
+  // GetGlobalCommandLine() 拿到空对象"而静默失效 —— 日志里照样打印
+  // "生效的命令行开关：--user-data-dir=…"，但数据目录仍是默认值。
+  // 这种"看起来生效、其实没生效"的问题只能靠对照实际路径来抓。
+  killAll()
+  await waitNoProcess()
+  const tempData = join(ROOT, '.tmp-acceptance-udd')
+  purgeDir(tempData)
+  mkdirSync(tempData, { recursive: true })
+  try {
+    rmSync(STARTUP_LOG, { force: true })
+  } catch {
+    /* 不存在就算了 */
+  }
+
+  const child = spawn(EXE, ['--url=https://example.com', `--user-data-dir=${tempData}`], {
+    cwd: join(ROOT, 'build-native')
+  })
+  let exited = false
+  child.on('exit', () => {
+    exited = true
+  })
+  for (let i = 0; i < 25 && !exited; i++) {
+    await sleep(1000)
+    if (existsSync(join(tempData, 'tibrowser.log'))) break
+  }
+  const startupLog = readStartupLog()
+  check('启动日志确认按命令行切换数据目录', /按命令行切换用户数据目录：/.test(startupLog))
+  check('自定义数据目录下真的写入了日志', existsSync(join(tempData, 'tibrowser.log')))
+  check(
+    '默认数据目录没有被这次启动写入',
+    !existsSync(join(USER_DATA, 'tibrowser.log')) || !readLog().includes('用户数据目录')
+  )
+  killAll()
+  await waitNoProcess()
+  purgeDir(tempData)
+
+  // --multi-process：只验证"开关被认到"，不验证页面可用性（本机多进程模式下网络不可用）
+  try {
+    rmSync(STARTUP_LOG, { force: true })
+  } catch {
+    /* 不存在就算了 */
+  }
+  const multi = spawn(EXE, ['--multi-process', '--url=https://example.com'], {
+    cwd: join(ROOT, 'build-native')
+  })
+  let multiExited = false
+  multi.on('exit', () => {
+    multiExited = true
+  })
+  await sleep(12000)
+  const multiLog = readStartupLog()
+  check('--multi-process 被认到并切换到标准进程模型', /进程模型：标准（多进程 \+ 沙箱）/.test(multiLog))
+  check('--multi-process 下进程仍稳定存活', !multiExited)
   killAll()
   await waitNoProcess()
 }

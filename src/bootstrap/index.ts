@@ -160,6 +160,7 @@ const METHOD_ALIASES: Record<string, string> = {
   profileExport: 'profile.export',
   profileImport: 'profile.import',
   getExtensions: 'extensions.list',
+  getExtensionRuntime: 'extensions.runtime',
   loadUnpackedExtension: 'extensions.loadUnpacked',
   loadCrx: 'extensions.loadCrx',
   removeExtension: 'extensions.remove',

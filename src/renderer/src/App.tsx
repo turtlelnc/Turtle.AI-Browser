@@ -1,5 +1,5 @@
 /**
- * TiBrowser 外壳 UI 根组件（v1.0.0-rc1）
+ * TiBrowser 外壳 UI 根组件（v1.0.1-rc2）
  *
  * 职责：
  *  1. 从 `tib.getState()` 拉取全量状态，并订阅 `state` / `windowState` 等事件；

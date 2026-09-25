@@ -1,6 +1,6 @@
 # tib-service —— TiBrowser 边车服务
 
-TiBrowser v1.0.0-rc1 的 Node 边车进程。它**不是**浏览器的一部分，而是一个可选的独立进程：
+TiBrowser v1.0.1-rc2 的 Node 边车进程。它**不是**浏览器的一部分，而是一个可选的独立进程：
 
 - 设置与密钥存储（Windows **DPAPI** 加密，绝不落盘明文）
 - 书签 / 历史 / 下载记录（JSON + 原子写）
@@ -33,7 +33,7 @@ node dist/index.js [--port <n>] [--token-file <path>] [--token <t>] [--energy-mo
 **stdout 只输出一行** JSON（原生父进程据此判定就绪）：
 
 ```json
-{"ready":true,"port":51234,"version":"1.0.0-rc1","build":260913,"capabilities":["store","ai:chat", "..."]}
+{"ready":true,"port":51234,"version":"1.0.1-rc2","build":260918,"capabilities":["store","ai:chat", "..."]}
 ```
 
 其余日志全部走 stderr。启动后写入 `<userData>/service.json`（port/token/pid）。

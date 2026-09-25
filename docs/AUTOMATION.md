@@ -1,6 +1,6 @@
 # TiBrowser 本地自动化 API
 
-> 适用版本：1.0.0-rc1 (build 260913)　｜　边车服务：`tib-service`　｜　本文档由 `service/src/automation/docs.ts` 自动生成，请勿手工编辑。
+> 适用版本：1.0.1-rc2 (build 260918)　｜　边车服务：`tib-service`　｜　本文档由 `service/src/automation/docs.ts` 自动生成，请勿手工编辑。
 
 TiBrowser 提供一个**仅监听本机回环地址**的自动化接口，让你自己的 AI 工具 / CLI / 脚本 / harness 直接驱动浏览器：打开页面、读取正文、点击与填写、执行脚本、截图、抓包……
 
@@ -24,8 +24,8 @@ TiBrowser 提供一个**仅监听本机回环地址**的自动化接口，让你
   "baseUrl": "http://127.0.0.1:51234/automation",
   "wsUrl": "ws://127.0.0.1:51234/automation-ws",
   "token": "（开启自动化时才写入的 64 位十六进制随机串）",
-  "version": "1.0.0-rc1",
-  "build": 260913,
+  "version": "1.0.1-rc2",
+  "build": 260918,
   "docs": "docs/AUTOMATION.md"
 }
 ```
@@ -34,7 +34,7 @@ TiBrowser 提供一个**仅监听本机回环地址**的自动化接口，让你
 
 ```bash
 curl -s http://127.0.0.1:<port>/health
-# {"ok":true,"version":"1.0.0-rc1","build":260913,"capabilities":[...]}
+# {"ok":true,"version":"1.0.1-rc2","build":260918,"capabilities":[...]}
 ```
 
 ## 3. 鉴权

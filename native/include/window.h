@@ -3,6 +3,8 @@
 
 #include "tib_common.h"
 
+#include <set>
+
 namespace tib {
 
 class TibWindow;
@@ -66,13 +68,14 @@ class ChromeClient : public CefClient, public CefLifeSpanHandler, public CefDisp
   IMPLEMENT_REFCOUNTING(ChromeClient);
 };
 
-/** 网页标签页的客户端：导航拦截、标题/加载状态回传、安全扫描、右键菜单 */
+/** 网页标签页的客户端：导航拦截、标题/加载状态回传、安全扫描、右键菜单、下载 */
 class PageClient : public CefClient,
                    public CefLifeSpanHandler,
                    public CefLoadHandler,
                    public CefDisplayHandler,
                    public CefRequestHandler,
                    public CefContextMenuHandler,
+                   public CefDownloadHandler,
                    public CefKeyboardHandler {
  public:
   PageClient(TibWindow* window, std::string tab_id)
@@ -84,6 +87,7 @@ class PageClient : public CefClient,
   CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
   CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
   CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override { return this; }
+  CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
   CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
 
   /**
@@ -139,6 +143,15 @@ class PageClient : public CefClient,
                        const CefString& url) override;
   void OnFaviconURLChange(CefRefPtr<CefBrowser> browser,
                           const std::vector<CefString>& icon_urls) override;
+  /**
+   * 页面的 console 消息里带 __TIB_FP__ 前缀的是无痕指纹回读探针的结果，
+   * 解析后与指纹画像逐项比对并写进日志 —— 这是"指纹改写真的生效了"的唯一硬证据。
+   */
+  bool OnConsoleMessage(CefRefPtr<CefBrowser> browser,
+                        cef_log_severity_t level,
+                        const CefString& message,
+                        const CefString& source,
+                        int line) override;
 
   // CefRequestHandler
   bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
@@ -153,6 +166,19 @@ class PageClient : public CefClient,
                            CefRefPtr<CefContextMenuParams> params,
                            CefRefPtr<CefMenuModel> model) override;
 
+  /**
+   * 下载：落盘到数据目录下的 Downloads，并按当前安全档位判定。
+   * 不安全的安装包**不拦截**（需求 6：可以保留，但要标成可疑并写清原因），
+   * turtlelnc 的发布物直接放行。
+   */
+  bool OnBeforeDownload(CefRefPtr<CefBrowser> browser,
+                        CefRefPtr<CefDownloadItem> download_item,
+                        const CefString& suggested_name,
+                        CefRefPtr<CefBeforeDownloadCallback> callback) override;
+  void OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                         CefRefPtr<CefDownloadItem> download_item,
+                         CefRefPtr<CefDownloadItemCallback> callback) override;
+
   const std::string& tab_id() const { return tab_id_; }
   CefRefPtr<CefBrowser> browser() const { return browser_; }
   /** 标签页被关闭时调用，避免悬空指针 */
@@ -162,6 +188,8 @@ class PageClient : public CefClient,
   TibWindow* window_;
   std::string tab_id_;
   CefRefPtr<CefBrowser> browser_;
+  /** 已登记的下载 id：完成态会被反复回调，用它保证每种结束状态只处理一次 */
+  std::set<uint32_t> download_ids_;
   IMPLEMENT_REFCOUNTING(PageClient);
 };
 
@@ -252,6 +280,10 @@ class TibWindow : public CefWindowDelegate, public CefBrowserViewDelegate {
   CefRefPtr<CefBrowser> active_page() const;
   CefRefPtr<CefBrowser> chrome_browser() const;
   bool incognito() const { return incognito_; }
+  /** 底层 CefWindow（右键菜单等需要窗口级的 CEF 能力） */
+  CefRefPtr<CefWindow> cef_window() const { return window_; }
+  /** 当前活动标签页对应的 CEF 视图（坐标换算用） */
+  CefRefPtr<CefBrowserView> active_view() const;
 
   /** 当前活动标签页的 URL / 标题（供书签、网页应用等使用） */
   std::string GetActiveUrl() const;

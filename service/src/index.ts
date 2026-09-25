@@ -9,7 +9,7 @@
  *
  * **stdout 只输出一行 JSON**（原生父进程据此判定就绪并解析端口）：
  * ```json
- * {"ready":true,"port":51234,"version":"1.0.0-rc1","build":260913,"capabilities":[...]}
+ * {"ready":true,"port":51234,"version":"1.0.1-rc2","build":260918,"capabilities":[...]}
  * ```
  * 其他一切日志（含警告与错误）一律写 stderr，避免污染这一行。
  *

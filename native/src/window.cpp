@@ -1,6 +1,7 @@
 // 浏览器窗口实现：多标签、布局、事件回传
 #include "window.h"
 
+#include "context_menu.h"
 #include "local_server.h"
 #include "router.h"
 #include "scheme.h"
@@ -8,7 +9,9 @@
 #include "security.h"
 
 #include <algorithm>
+#include <ctime>
 #include <memory>
+#include <set>
 
 namespace tib {
 namespace {
@@ -144,6 +147,34 @@ class UiProbeTask : public CefTask {
   int round_;
   IMPLEMENT_REFCOUNTING(UiProbeTask);
 };
+
+/**
+ * 无痕模式 2.0 的指纹回读探针。
+ *
+ * 为什么需要它：指纹改写脚本"注入成功"与"页面里真的读到改写后的值"是两件事，
+ * 前者只证明我们执行了一段 JS。这里在页面加载完成后回读页面自己看到的值，
+ * 由原生侧与指纹画像逐项比对 —— 这是"指纹改写对页面生效"的唯一硬证据。
+ */
+constexpr char kFingerprintProbeScript[] = R"JS(
+(function () {
+  try {
+    var out = {
+      ua: String(navigator.userAgent),
+      platform: String(navigator.platform),
+      language: String(navigator.language),
+      cores: String(navigator.hardwareConcurrency),
+      dnt: String(navigator.doNotTrack),
+      sw: String(screen.width),
+      sh: String(screen.height),
+      tz: ''
+    };
+    try { out.tz = String(Intl.DateTimeFormat().resolvedOptions().timeZone); } catch (e) {}
+    console.log('__TIB_FP__' + JSON.stringify(out));
+  } catch (e) {
+    console.log('__TIB_FP__{"error":"' + (e && e.message ? e.message : String(e)) + '"}');
+  }
+})();
+)JS";
 
 }  // namespace
 
@@ -534,6 +565,13 @@ CefRefPtr<CefBrowser> TibWindow::active_page() const {
 
 CefRefPtr<CefBrowser> TibWindow::chrome_browser() const {
   return chrome_view_ ? chrome_view_->GetBrowser() : nullptr;
+}
+
+CefRefPtr<CefBrowserView> TibWindow::active_view() const {
+  const auto it = std::find_if(tabs_.begin(), tabs_.end(),
+                               [&](const std::shared_ptr<Tab>& t) { return t->id == active_id_; });
+  if (it == tabs_.end()) return nullptr;
+  return (*it)->view;
 }
 
 void TibWindow::Navigate(const std::string& input) {
@@ -1109,6 +1147,23 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
     CreateTab(extra, true);
   }
 
+  // 【诊断开关】--tib-download-probe：打开会触发下载的本地探针地址。
+  // 必要性：下载只能靠"点一个下载链接"触发，而下载探针地址带随机 token，
+  // 测试脚本无法自己拼出来；由原生打开并打印地址，下载链路才可被自动化验证。
+  if (CefCommandLine::GetGlobalCommandLine() &&
+      CefCommandLine::GetGlobalCommandLine()->HasSwitch("tib-download-probe")) {
+    // 开关值可选：给出文件名时用它（例如 xxx-setup.exe 用来验证"不安全安装包只警告不拦截"）
+    const std::string wanted =
+        CefCommandLine::GetGlobalCommandLine()->GetSwitchValue("tib-download-probe").ToString();
+    const std::string probe = DownloadProbeUrl(wanted);
+    if (probe.empty()) {
+      Log("实验：下载探针不可用（本地服务器未启动）");
+    } else {
+      Log("实验：打开下载探针标签页 " + probe);
+      CreateTab(probe, true);
+    }
+  }
+
   Layout();
   Log("OnWindowCreated: 布局完成");
 
@@ -1118,6 +1173,19 @@ void TibWindow::OnWindowCreated(CefRefPtr<CefWindow> window) {
   if (!close_after.empty()) {
     Log("实验：将在 " + close_after + "ms 后请求关闭窗口");
     CefPostDelayedTask(TID_UI, new CloseWindowTask(this), std::atoi(close_after.c_str()));
+  }
+
+  // 【诊断开关】--tib-menu-probe[=show]：右键菜单自检。
+  // 必要性：右键菜单只能靠"人点一下"触发，自动化里没有右键动作；
+  // 这个开关让菜单构造与弹出都能被日志证明，而不是只能靠人工确认。
+  // show 模式会真实弹出菜单并安排 1.5 秒后收起（ShowMenu 是阻塞调用，必须能自己收）。
+  if (CefCommandLine::GetGlobalCommandLine() &&
+      CefCommandLine::GetGlobalCommandLine()->HasSwitch("tib-menu-probe")) {
+    const std::string mode =
+        CefCommandLine::GetGlobalCommandLine()->GetSwitchValue("tib-menu-probe").ToString();
+    const bool show = (mode == "show");
+    Log(std::string("实验：3 秒后执行右键菜单自检") + (show ? "（含真实弹出）" : "（只构造不弹出）"));
+    ScheduleContextMenuSelfTest(this, show);
   }
 
   // 外壳 UI 的唯一加载入口：必须在这里（OnWindowCreated 末尾、视图已挂载之后）。
@@ -1496,6 +1564,13 @@ void PageClient::OnLoadEnd(CefRefPtr<CefBrowser> browser,
       NativeStore::Get().AddHistory(window_->GetActiveTitle(), url);
     }
   }
+  // 无痕窗口：页面加载完后回读指纹，验证改写是否真的对页面生效（见文件末尾的说明）
+  if (window_ && window_->incognito()) {
+    const std::string url = frame->GetURL().ToString();
+    if (!url.empty() && url.rfind("http", 0) == 0) {
+      frame->ExecuteJavaScript(kFingerprintProbeScript, url, 0);
+    }
+  }
 }
 
 bool PageClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
@@ -1570,12 +1645,198 @@ void PageClient::OnBeforeContextMenu(CefRefPtr<CefBrowser> browser,
                                      CefRefPtr<CefFrame> frame,
                                      CefRefPtr<CefContextMenuParams> params,
                                      CefRefPtr<CefMenuModel> model) {
-  (void)browser;
-  (void)frame;
-  (void)params;
-  (void)model;
-  // 由外壳 UI 渲染自己的右键菜单（Apple 风格统一），此处清空原生菜单
+  // 清空 CEF 自带的菜单，换成我们自己的（条目见 context_menu.cpp）：
+  //   * CEF 默认菜单在 Alloy 风格下条目很少，且没有缩放/另存为/复制链接等日常动作；
+  //   * 外壳 UI 的 React 菜单只覆盖外壳自己那块区域，网页里的右键到不了它。
+  // 注意必须 Clear()：否则 CEF 会在我们弹出自己的菜单之后，再弹一次它的默认菜单。
   model->Clear();
+  if (!window_) return;
+  ShowPageContextMenu(window_, browser, frame, params);
+}
+
+// ---------------------------------------------------------------- 下载
+
+bool PageClient::OnBeforeDownload(CefRefPtr<CefBrowser> browser,
+                                  CefRefPtr<CefDownloadItem> download_item,
+                                  const CefString& suggested_name,
+                                  CefRefPtr<CefBeforeDownloadCallback> callback) {
+  (void)browser;
+  if (!download_item || !callback) return false;
+
+  const std::string url = download_item->GetURL().ToString();
+  std::string name = download_item->GetSuggestedFileName().ToString();
+  if (name.empty()) name = suggested_name.ToString();
+  if (name.empty()) name = "download.bin";
+  // 文件名来自页面，必须清掉路径分隔符与非法字符，否则可能被写到目录之外
+  for (char& ch : name) {
+    if (ch == '\\' || ch == '/' || ch == ':' || ch == '*' || ch == '?' || ch == '"' ||
+        ch == '<' || ch == '>' || ch == '|' || static_cast<unsigned char>(ch) < 0x20) {
+      ch = '_';
+    }
+  }
+
+  // 需求 6：下载也要过安全档位。不安全的安装包**不拦截**（用户可以保留），
+  // 但会被标成可疑并写清原因；turtlelnc 的发布物直接放行（自己团队的产物不该被自家浏览器拦）。
+  const ScanResult verdict = CheckDownload(url, name);
+  const std::string dir = AppContext::Get().user_data_dir() + "\\Downloads";
+  ::CreateDirectoryA(dir.c_str(), nullptr);
+  const std::string path = dir + "\\" + name;
+
+  if (verdict.action == "block") {
+    Log("下载已拦截：" + name + "（" + verdict.category + "：" + verdict.reason + "）" + url);
+    // CEF 的取消方式是"继续到一个空路径"：先让回调完成，内核随即取消这次下载。
+    callback->Continue(CefString(), false);
+    return true;
+  }
+
+  DownloadRecord record;
+  record.id = MakeId();
+  record.filename = name;
+  record.url = url;
+  record.save_path = path;
+  record.state = "progressing";
+  record.suspicious = verdict.action == "warn";
+  record.suspicious_reason = verdict.reason;
+  record.started_at = static_cast<int64_t>(::time(nullptr));
+  NativeStore::Get().UpsertDownload(record);
+  download_ids_.insert(download_item->GetId());
+
+  if (verdict.trusted) {
+    Log("下载开始（turtlelnc 发布物，直接放行）：" + name + " → " + path);
+  } else if (verdict.action == "warn") {
+    Log("下载开始（已标记为可疑，可自行保留）：" + name + " → " + path + "；原因：" +
+        verdict.reason);
+  } else {
+    Log("下载开始：" + name + " → " + path);
+  }
+
+  // 第二个参数 show_dialog=false：本外壳没有系统下载对话框，落盘路径固定为数据目录下的
+  // Downloads，进度由 OnDownloadUpdated 写进下载列表（UI 的"下载"页可查）。
+  callback->Continue(path, false);
+  return true;
+}
+
+void PageClient::OnDownloadUpdated(CefRefPtr<CefBrowser> browser,
+                                   CefRefPtr<CefDownloadItem> download_item,
+                                   CefRefPtr<CefDownloadItemCallback> callback) {
+  (void)browser;
+  (void)callback;
+  if (!download_item || !download_item->IsValid()) return;
+
+  const uint32_t id = download_item->GetId();
+  const bool done = download_item->IsComplete();
+  const bool canceled = download_item->IsCanceled();
+  const bool interrupted = download_item->IsInterrupted();
+  if (!done && !canceled && !interrupted) return;  // 进度更新不刷日志，避免刷屏
+  // 完成态会被反复回调，这里只处理一次
+  if (download_ids_.erase(id) == 0) return;
+
+  const std::string path = download_item->GetFullPath().ToString();
+  const std::string name = download_item->GetSuggestedFileName().ToString();
+  for (DownloadRecord& r : NativeStore::Get().downloads) {
+    if (r.url == download_item->GetURL().ToString() && !path.empty() &&
+        r.save_path == path) {
+      r.received = download_item->GetReceivedBytes();
+      r.total = download_item->GetTotalBytes();
+      r.state = done ? "completed" : (canceled ? "cancelled" : "interrupted");
+      NativeStore::Get().UpsertDownload(r);
+      break;
+    }
+  }
+
+  if (done) {
+    Log("下载完成：" + path + "（" + std::to_string(download_item->GetReceivedBytes()) +
+        " 字节）");
+  } else if (canceled) {
+    Log("下载已取消：" + (name.empty() ? path : name));
+  } else {
+    Log("下载中断：" + (name.empty() ? path : name) + "（中断原因码 " +
+        std::to_string(static_cast<int>(download_item->GetInterruptReason())) + "）");
+  }
+}
+
+// ---------------------------------------------------------------- 无痕指纹回读
+//
+// 探针脚本 kFingerprintProbeScript 定义在文件开头的匿名命名空间里（OnLoadEnd 要用它），
+// 这里只放"比对与写日志"的部分。
+namespace {
+
+/** 指纹画像里的屏幕尺寸写成 "1920x1080"，比对时拆成宽高两项 */
+std::string ScreenPart(const std::string& screen, bool width) {
+  if (screen.empty() || screen == "跟随系统") return "跟随系统";
+  const size_t x = screen.find('x');
+  if (x == std::string::npos) return "跟随系统";
+  return width ? screen.substr(0, x) : screen.substr(x + 1);
+}
+
+std::string ScreenWidth(const std::string& screen) { return ScreenPart(screen, true); }
+std::string ScreenHeight(const std::string& screen) { return ScreenPart(screen, false); }
+
+/** 逐项比对：跟随系统的项不判定，改写的项必须与画像一致 */
+std::string CompareField(const char* label, const std::string& expected, const std::string& actual,
+                         int& same, int& diff, int& following) {
+  if (expected.empty() || expected == "跟随系统") {
+    following++;
+    return std::string(label) + "=跟随系统(" + actual + ")";
+  }
+  if (expected == actual) {
+    same++;
+    return std::string(label) + "=一致(" + actual + ")";
+  }
+  diff++;
+  return std::string(label) + "=不一致(期望" + expected + "，实际" + actual + ")";
+}
+
+}  // namespace
+
+bool PageClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
+                                  cef_log_severity_t level,
+                                  const CefString& message,
+                                  const CefString& source,
+                                  int line) {
+  (void)browser;
+  (void)level;
+  (void)source;
+  (void)line;
+  const std::string text = message.ToString();
+  constexpr char kProbePrefix[] = "__TIB_FP__";
+  if (text.rfind(kProbePrefix, 0) != 0) return false;
+
+  const std::string json = text.substr(sizeof(kProbePrefix) - 1);
+  CefRefPtr<CefValue> value = CefParseJSON(json, JSON_PARSER_RFC);
+  CefRefPtr<CefDictionaryValue> dict =
+      (value && value->GetType() == VTYPE_DICTIONARY) ? value->GetDictionary() : nullptr;
+  if (!dict) {
+    Log("无痕指纹回读：解析失败（原始内容 " + json.substr(0, 160) + "）");
+    return true;
+  }
+  auto str = [&](const char* key) {
+    return dict->HasKey(key) ? dict->GetString(key).ToString() : std::string();
+  };
+
+  const FingerprintProfile& f = NativeStore::Get().fingerprint;
+  int same = 0;
+  int diff = 0;
+  int following = 0;
+  std::string detail;
+  auto add = [&](const std::string& part) {
+    if (!detail.empty()) detail += " ";
+    detail += part;
+  };
+  add(CompareField("语言", f.language, str("language"), same, diff, following));
+  add(CompareField("时区", f.timezone, str("tz"), same, diff, following));
+  add(CompareField("核心数", f.hardware_concurrency, str("cores"), same, diff, following));
+  add(CompareField("UA", f.user_agent, str("ua"), same, diff, following));
+  add(CompareField("平台", f.platform, str("platform"), same, diff, following));
+  add(CompareField("DNT", f.do_not_track, str("dnt"), same, diff, following));
+  add(CompareField("屏幕宽", ScreenWidth(f.screen), str("sw"), same, diff, following));
+  add(CompareField("屏幕高", ScreenHeight(f.screen), str("sh"), same, diff, following));
+
+  Log("无痕指纹回读：" + detail);
+  Log("无痕指纹比对：一致 " + std::to_string(same) + " 项、跟随系统 " + std::to_string(following) +
+      " 项、不一致 " + std::to_string(diff) + " 项" +
+      (diff == 0 ? "（改写项全部生效）" : "（有改写项未生效，指纹隔离未完全成立）"));
+  return true;
 }
 
 // ---------------------------------------------------------------- 窗口管理

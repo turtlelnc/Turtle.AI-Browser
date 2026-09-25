@@ -245,6 +245,19 @@ export interface ExtensionInfo {
   permissions?: string[]
 }
 
+/**
+ * 扩展**运行**能力（区别于上面的"登记"信息）。
+ * 当前内核 CEF 150 已移除扩展运行 API，supported 恒为 false，
+ * 界面据此如实说明，而不是把"已启用"当成"正在运行"。
+ */
+export interface ExtensionRuntimeInfo {
+  supported: boolean
+  /** 中文原因，直接展示给用户 */
+  reason: string
+  /** 扩展清单是否仍可管理（导入 / 解包 / 开关 / 删除） */
+  listManaged: boolean
+}
+
 // ---------------------------------------------------------------------------
 // AI 模型连接（feature 9）/ AI 模式（feature 12）
 // ---------------------------------------------------------------------------
@@ -686,6 +699,8 @@ export interface TibBridge {
 
   // ---- 扩展程序 ----
   getExtensions(): Promise<ExtensionInfo[]>
+  /** 扩展**运行**能力（CEF 150 已移除扩展 API，结果是 supported=false + 中文原因） */
+  getExtensionRuntime(): Promise<ExtensionRuntimeInfo>
   loadUnpackedExtension(path?: string): Promise<ExtensionInfo | null>
   loadCrx(path?: string): Promise<ExtensionInfo | null>
   removeExtension(id: string): Promise<OkResult>

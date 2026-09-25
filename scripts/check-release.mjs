@@ -5,7 +5,7 @@
 // 它们出错时都不会报错，只会静默地表现成"改了没生效"。这个脚本把它们显式检出来。
 //
 // 用法：node scripts/check-release.mjs
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 const ROOT = resolve(import.meta.dirname, '..')
@@ -57,6 +57,66 @@ console.log('1. 版本号一致性')
 
   if (sw.includes(`APP_VERSION = '${VERSION}'`)) ok('src/shared/constants.ts 版本一致')
   else fail('src/shared/constants.ts 版本不一致', '未找到期望的 APP_VERSION')
+
+  // ---- 以前漏检、结果真的飘了的地方 ----
+  // 这些都是"改了没人报错、只在用户那里显示成旧版本"的位置：
+  // Windows 文件属性、边车握手自报版本、边车锁文件、UI 产物里的构建号。
+  const svcLock = JSON.parse(readFileSync(join(ROOT, 'service/package-lock.json'), 'utf8'))
+  if (svcLock.version === VERSION && svcLock.packages?.['']?.version === VERSION) {
+    ok('service/package-lock.json 版本一致')
+  } else {
+    fail('service/package-lock.json 版本不一致',
+      `lock=${svcLock.version} root=${svcLock.packages?.['']?.version} pkg=${VERSION}`)
+  }
+
+  const svcSw = readFileSync(join(ROOT, 'service/src/shared/constants.ts'), 'utf8')
+  if (svcSw.includes(`APP_VERSION = '${VERSION}'`) && svcSw.includes(`APP_BUILD = ${BUILD}`)) {
+    ok('service/src/shared/constants.ts 版本一致')
+  } else {
+    fail('service/src/shared/constants.ts 版本不一致', '边车自报版本与本版本不符')
+  }
+
+  const rc = readFileSync(join(ROOT, 'native/resources/tibrowser.rc'), 'utf8')
+  if (rc.includes(`"${VERSION} (build ${BUILD})"`)) ok('Windows 资源版本一致（文件属性里能看到）')
+  else fail('native/resources/tibrowser.rc 版本不一致', `未找到 "${VERSION} (build ${BUILD})"`)
+  const numeric = `${VERSION.replace(/-rc\d+$/, '').split('.').join(',')},${BUILD}`
+  if (rc.includes(numeric)) ok('Windows 数值版本一致', numeric)
+  else fail('native/resources/tibrowser.rc 数值版本不一致', `未找到 ${numeric}`)
+
+  const vite = readFileSync(join(ROOT, 'vite.config.ts'), 'utf8')
+  if (/process\.env\.TIB_BUILD \?\? buildFromConstants\(\)/.test(vite)) {
+    ok('UI 构建号兜底值从 constants.ts 读取（不再手抄）')
+  } else {
+    fail('vite.config.ts 构建号兜底值被写死', '构建号升级后单独跑 ui:build 会打进旧构建号')
+  }
+
+  // ---- 全仓扫描：源码与文档里不该再出现旧版本号 ----
+  // CHANGELOG 是发布历史（允许旧版本号）；构建产物与依赖目录不扫。
+  const skipDirs = /(^|[\\/])(node_modules|dist|build-native|build-installer|release|third_party|\.cef-cache|\.git)([\\/]|$)/
+  const stale = []
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (skipDirs.test(full)) continue
+      if (entry.isDirectory()) {
+        walk(full)
+        continue
+      }
+      if (!/\.(ts|tsx|cpp|h|hpp|md|json|rc|mjs|yml|css|html)$/.test(entry.name)) continue
+      if (/^(CHANGELOG\.md|claudetalk\.txt|check-release\.mjs)$/.test(entry.name)) continue
+      if (entry.name.startsWith('.tmp-')) continue
+      // 「v1.0.0-rc1 起…」这类是**历史陈述**（记录从哪个版本开始换掉 Electron），
+      // 不是"当前版本"的声明，扫描前先剔除。
+      const text = readFileSync(full, 'utf8').replace(/v?1\.0\.0-rc1 起/g, '')
+      const hits = []
+      if (text.includes('1.0.0-rc1')) hits.push('1.0.0-rc1')
+      if (text.includes('260913')) hits.push('260913')
+      if (hits.length) stale.push(`${full.slice(ROOT.length + 1)}（${hits.join('、')}）`)
+    }
+  }
+  walk(ROOT)
+  if (stale.length === 0) ok('全仓无残留旧版本号')
+  else fail('仍有过期的版本号引用', stale.join('; '))
 }
 
 // ---------------------------------------------------------------- 2. 许可证一致性

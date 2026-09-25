@@ -766,6 +766,17 @@ export function createMockBridge(): TibBridge {
       await delay(40)
       return clone(store.extensions)
     },
+    getExtensionRuntime: async () => {
+      await delay(10)
+      // mock 桥与原生保持同一份事实：能登记，不能运行
+      return {
+        supported: false,
+        reason:
+          '当前内核（CEF 150）已移除扩展运行 API：可以导入、解包并登记扩展清单，' +
+          '但扩展的内容脚本与后台任务不会被内核执行',
+        listManaged: true
+      }
+    },
     loadUnpackedExtension: async (path) => {
       await delay(300)
       const ext: ExtensionInfo = {

@@ -112,4 +112,30 @@ void Log(const std::string& message) {
   }
 }
 
+bool SetClipboardText(const std::string& utf8) {
+  // 剪贴板是进程外共享资源，OpenClipboard 可能被别的程序短暂占用 ——
+  // 失败时如实返回 false（调用方会写"无法访问剪贴板"），不假装已经复制成功。
+  if (!::OpenClipboard(nullptr)) return false;
+  ::EmptyClipboard();
+  const int len = ::MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+  if (len <= 0) {
+    ::CloseClipboard();
+    return false;
+  }
+  HGLOBAL mem = ::GlobalAlloc(GMEM_MOVEABLE, static_cast<SIZE_T>(len) * sizeof(wchar_t));
+  if (!mem) {
+    ::CloseClipboard();
+    return false;
+  }
+  bool ok = false;
+  if (void* dst = ::GlobalLock(mem)) {
+    ::MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, static_cast<wchar_t*>(dst), len);
+    ::GlobalUnlock(mem);
+    ok = ::SetClipboardData(CF_UNICODETEXT, mem) != nullptr;
+  }
+  if (!ok) ::GlobalFree(mem);
+  ::CloseClipboard();
+  return ok;
+}
+
 }  // namespace tib

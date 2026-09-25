@@ -5,7 +5,7 @@
 
 ## 1. 目标架构（与 v0.1.0 的根本差异）
 
-v0.1.0 是 Electron（内嵌 Chromium）。v1.0.0-rc1 **舍去 Electron 运行时**，
+v0.1.0 是 Electron（内嵌 Chromium）。v1.0.1-rc2 **舍去 Electron 运行时**，
 浏览器主程序是原生 C++ 可执行文件，直接链接 **CEF（Chromium Embedded Framework）**，
 即真正的 Chromium 内核（Chromium 150 / CEF 150.0.20）。
 
@@ -51,32 +51,39 @@ Turtle.AI-Browser/
 │   ├── CMakeLists.txt
 │   ├── include/            # 头文件
 │   └── src/
-│       ├── main.cpp        # 入口 + CefMainArgs + 子进程分发
+│       ├── main.cpp        # 入口 + CefMainArgs + 子进程分发 + 崩溃处理器
 │       ├── app.h/.cpp      # CefApp / CefBrowserProcessHandler
-│       ├── window.h/.cpp   # TibWindow：多标签 + Views 布局
-│       ├── chrome_view.*   # React 外壳（tib://ui）
-│       ├── scheme.*        # tib:// 自定义协议与资源映射
-│       ├── router.*        # CefMessageRouter ↔ tib.* 查询分发
-│       ├── security.*      # 三档安全浏览、下载放行、turtlelnc 例外
-│       ├── incognito.*     # 无痕 2.0：指纹改写、独立上下文
-│       ├── energy.*        # 能效四档
+│       ├── window.h/.cpp   # TibWindow：多标签 + Views 布局 + 下载管线
+│       ├── context_menu.*  # 网页右键菜单（22 项，含自检）
+│       ├── local_server.*  # 回环 HTTP：提供 UI / 内置页 / 下载探针
+│       ├── router.*        # UI 调用分发（window.tib 的 __TIB_CALL__ 上行）
+│       ├── security.*      # 三档安全浏览、下载判定、turtlelnc 例外、指纹脚本
+│       ├── store.*         # 数据目录下的 JSON 存储（设置/书签/历史/下载/扩展/指纹/账户）
+│       ├── api.*           # UI 契约实现（settings/skin/energy/security/...）
+│       ├── crx.*           # CRX2/CRX3 解包（扩展导入用）
 │       └── service_client.*# 与 sidecar 的 HTTP/SSE 通信
+├── installer/              # 自研原生安装器（Win32 + Shell API，零外部依赖）
 ├── service/                # Node 边车（AI / 存储 / 自动化 API）
 │   └── src/
 ├── src/
 │   ├── shared/             # 三方共享的类型与常量（唯一契约）
-│   ├── renderer/           # React 浏览器外壳 UI（tib://ui）
-│   └── legacy-electron/    # v0.1.0 的 Electron 实现（保留只读参考）
-├── resources/              # 黑名单、图标、内置页面
+│   ├── bootstrap/          # 注入脚本（window.tib 桥接）→ dist/ui/tib-host.js
+│   ├── renderer/           # React 浏览器外壳 UI
+│   └── main/ preload/      # v0.1.0 的 Electron 实现（已退役，只读参考）
+├── resources/              # 黑名单、诊断页、内置页面
 ├── docs/                   # 架构与接口文档
-├── scripts/                # 构建 / 取内核 / 打包脚本
-└── release/                # 最终用户使用的部分（安装包）
+├── scripts/                # 构建 / 取内核 / 打包 / 自检脚本
+└── release/                # 最终用户使用的部分（安装器与发行目录）
 ```
 
 ## 3. UI ↔ 原生：`window.tib` 桥
 
-外壳 UI 通过 `tib://ui/index.html` 加载，注入 `window.tib`。所有调用都是
-`Promise`（底层是 CefMessageRouter 的 query），事件通过 `window.tib.on(evt, cb)` 订阅。
+外壳 UI 通过**本地回环 HTTP**加载（`http://127.0.0.1:<端口>/<随机 token>/ui/index.html`，
+见 `native/src/local_server.cpp`）——早期用 `tib://` 自定义协议，但本机 CEF 始终返回
+`ERR_UNKNOWN_URL_SCHEME`，因此改成只绑定 127.0.0.1、必须带 token 的本地 HTTP。
+页面里注入 `window.tib`。所有调用都是 `Promise`
+（底层是渲染进程 console 消息 `__TIB_CALL__` + 原生 `ExecuteJavaScript` 回执），
+事件通过 `window.tib.on(evt, cb)` 订阅。
 
 ### 3.1 命令（UI → 原生）
 
@@ -113,7 +120,8 @@ Turtle.AI-Browser/
 | `tib.getSkin()` / `tib.setSkin(s)` | `BrowserSkin` | `{ok}` | 皮肤切换（tibrowser/edge/chrome） |
 | `tib.getInstalledApps()` / `tib.installWebApp(url, name, icon)` / `tib.uninstallWebApp(id)` / `tib.launchWebApp(id)` | — | `WebApp[]` | 生成网页应用 |
 | `tib.getAccounts()` / `tib.signIn(provider)` / `tib.signOut(provider)` / `tib.getSyncState()` / `tib.syncNow()` | — | — | 账户与同步 |
-| `tib.getExtensions()` / `tib.loadUnpackedExtension(path)` / `tib.loadCrx(path)` / `tib.removeExtension(id)` / `tib.setExtensionEnabled(id, on)` | — | `ExtensionInfo[]` | 扩展 |
+| `tib.getExtensions()` / `tib.loadUnpackedExtension(path)` / `tib.loadCrx(path)` / `tib.removeExtension(id)` / `tib.setExtensionEnabled(id, on)` | — | `ExtensionInfo[]` | 扩展清单管理 |
+| `tib.getExtensionRuntime()` | — | `{supported, reason, listManaged}` | 扩展**运行**能力（CEF 150 已移除扩展 API，`supported` 恒为 `false`，`reason` 为中文原因，界面据此如实说明） |
 | `tib.profileExport()` / `tib.profileImport()` | — | `ProfileExportResult` | `.tbuser` 迁移 |
 | `tib.aiChat(payload)` / `tib.aiAbort(requestId)` | `{requestId, messages, mode}` | `{requestId}` | AI 对话（流式见事件） |
 | `tib.aiAgent(payload)` | `{requestId, messages, permission}` | `{requestId}` | AI 智能体 |
@@ -164,7 +172,7 @@ Turtle.AI-Browser/
 所有跨进程类型定义在 `src/shared/types.ts`，常量在 `src/shared/constants.ts`。
 新增字段一律**可选**并在实现中给默认值，保证皮肤/档位降级不崩 UI。
 
-`APP_VERSION = '1.0.0-rc1'`，`APP_BUILD = 260913`，展示格式 `v1.0.0-rc1 (build 260913)`。
+`APP_VERSION = '1.0.1-rc2'`，`APP_BUILD = 260918`，展示格式 `v1.0.1-rc2 (build 260918)`。
 
 
 ## 7. 原生外壳实现约束（实测结论，改代码前必读）

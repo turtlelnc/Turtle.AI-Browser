@@ -1,6 +1,6 @@
 # TiBrowser 边车服务 API（tib-service）
 
-> 适用版本：1.0.0-rc1 (build 260913)　｜　本文档由 `service/src/tools/gen-docs.ts` 自动生成，请勿手工编辑。
+> 适用版本：1.0.1-rc2 (build 260918)　｜　本文档由 `service/src/tools/gen-docs.ts` 自动生成，请勿手工编辑。
 
 本文件描述 Node 边车（`tib-service`）对原生浏览器暴露的**本地 RPC 接口**，契约见 `docs/ARCHITECTURE.md` 第 4 节。
 

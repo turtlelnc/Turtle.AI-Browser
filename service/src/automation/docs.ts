@@ -69,7 +69,7 @@ export function renderAutomationDoc(opts: { userDataDir: string }): string {
   lines.push('')
   lines.push('```bash')
   lines.push('curl -s http://127.0.0.1:<port>/health')
-  lines.push('# {"ok":true,"version":"1.0.0-rc1","build":260913,"capabilities":[...]}')
+  lines.push('# {"ok":true,"version":"1.0.1-rc2","build":260918,"capabilities":[...]}')
   lines.push('```')
   lines.push('')
   lines.push('## 3. 鉴权')

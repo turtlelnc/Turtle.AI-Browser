@@ -214,6 +214,20 @@ export interface ExtensionInfo {
   fromCrx: boolean
 }
 
+/**
+ * 扩展**运行**能力（不是登记能力）。
+ *
+ * 当前内核 CEF 150 已移除扩展运行 API，所以 supported 恒为 false：
+ * 界面据此如实说明"能登记但不能运行"，而不是把"已启用"显示成"正在运行"。
+ */
+export interface ExtensionRuntimeInfo {
+  supported: boolean
+  /** 中文原因，直接展示给用户 */
+  reason: string
+  /** 扩展清单是否仍可管理（导入 / 解包 / 开关 / 删除） */
+  listManaged: boolean
+}
+
 // ---------- 配置文件同步 ----------
 
 export interface ProfileExportResult {

@@ -17,6 +17,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { readJson, writeJsonAtomic } from '../store/json-store.js'
 import { userDataFile } from '../paths.js'
+import { APP_VERSION } from '../shared/constants.js'
 
 /** MCP 服务器配置 */
 export interface McpServerConfig {
@@ -170,7 +171,8 @@ export class McpStdioClient {
       const result = (await this.request('initialize', {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: {} },
-        clientInfo: { name: 'tib-service', version: '1.0.0-rc1' }
+        // 版本号取共享常量，避免像以前那样在这里硬编码一份会过期的字符串
+        clientInfo: { name: 'tib-service', version: APP_VERSION }
       })) as { serverInfo?: { name?: string; version?: string } }
       this.serverInfo = {
         name: result?.serverInfo?.name ?? this.config.name,

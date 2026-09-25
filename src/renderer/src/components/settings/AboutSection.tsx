@@ -1,7 +1,7 @@
 /**
  * 设置 · 关于
  *
- * 版本号固定展示为 `v1.0.0-rc1 (build 260913)`（APP_VERSION / APP_BUILD 的展示格式），
+ * 版本号固定展示为 `v1.0.1-rc2 (build 260918)`（APP_VERSION / APP_BUILD 的展示格式），
  * 内核版本由构建期 `{cefVersion}` 占位符注入（见根目录 vite.config.ts 的 define）。
  */
 import { useEffect, useState } from 'react'

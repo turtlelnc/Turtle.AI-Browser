@@ -129,14 +129,36 @@ std::string AppsJson() {
 }
 
 std::string ExtensionsJson() {
+  const NativeStore& store = NativeStore::Get();
+  const std::string crx_root = store.dir() + "\\extensions\\";
   std::vector<std::string> items;
-  for (const ExtensionRecord& e : NativeStore::Get().extensions) {
+  for (const ExtensionRecord& e : store.extensions) {
+    // fromCrx 由路径推导：.crx 解包出来的扩展一定落在 <数据目录>\extensions\<id> 下。
+    // 之前这里没返回该字段，界面上的「来自 .crx / 已解压目录」徽标因此永远显示后者。
+    const bool from_crx = e.path.rfind(crx_root, 0) == 0;
     items.push_back("{\"id\":" + Quote(e.id) + ",\"name\":" + Quote(e.name) +
                     ",\"version\":" + Quote(e.version) + ",\"path\":" + Quote(e.path) +
                     ",\"enabled\":" + (e.enabled ? "true" : "false") +
+                    ",\"fromCrx\":" + (from_crx ? "true" : "false") +
                     ",\"description\":" + Quote(e.description) + "}");
   }
   return Join(items);
+}
+
+/**
+ * 扩展运行能力（如实回答，不假装可用）。
+ *
+ * CEF 150 的头文件里已经既没有 LoadExtension 也没有 CefExtensionHandler ——
+ * Chromium 嵌入方案不再提供扩展运行能力。因此本浏览器只能做扩展的
+ * 导入 / 解包 / 清单校验 / 登记 / 开关，扩展脚本与后台任务不会被执行。
+ * 这条结论以**数据**形式返回（而不是只写在文档和界面文案里），
+ * 这样界面和用户自己的 AI 工具都能拿到同一份事实。
+ */
+std::string ExtensionRuntimeJson() {
+  return "{\"supported\":false,\"reason\":" +
+         Quote("当前内核（CEF 150）已移除扩展运行 API：可以导入、解包并登记扩展清单，"
+               "但扩展的内容脚本与后台任务不会被内核执行") +
+         ",\"listManaged\":true}";
 }
 
 std::string FingerprintJson() {
@@ -515,6 +537,7 @@ std::string DispatchApi(TibWindow* window, const std::string& method,
 
   // ---------- 扩展 ----------
   if (method == "extensions.list") return ExtensionsJson();
+  if (method == "extensions.runtime") return ExtensionRuntimeJson();
   if (method == "extensions.setEnabled") {
     const bool ok = store.SetExtensionEnabled(ArgStr(args, "id"), ArgBool(args, "on", true));
     if (!ok) return "{\"__error\":" + Quote("未找到该扩展") + "}";
@@ -583,8 +606,8 @@ std::string DispatchApi(TibWindow* window, const std::string& method,
     store.SaveExtensions();
     if (window) window->SendExtensionsChanged(ExtensionsJson());
     return "{\"id\":" + Quote(rec.id) + ",\"name\":" + Quote(rec.name) + ",\"version\":" +
-           Quote(rec.version) + ",\"path\":" + Quote(rec.path) +
-           ",\"enabled\":true,\"description\":" + Quote(rec.description) + "}";
+           Quote(rec.version) + ",\"path\":" + Quote(rec.path) + ",\"enabled\":true,\"fromCrx\":" +
+           (crx ? "true" : "false") + ",\"description\":" + Quote(rec.description) + "}";
   }
 
   // ---------- 账户与同步（feature 3） ----------
@@ -720,20 +743,8 @@ std::string DispatchApi(TibWindow* window, const std::string& method,
   // ---------- 剪贴板 ----------
   if (method == "copy.clipboard") {
     const std::string text = ArgStr(args, "text", ArgStr(args, "value"));
-    if (::OpenClipboard(nullptr)) {
-      ::EmptyClipboard();
-      const int len = ::MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
-      HGLOBAL mem = ::GlobalAlloc(GMEM_MOVEABLE, len * sizeof(wchar_t));
-      if (mem) {
-        if (void* dst = ::GlobalLock(mem)) {
-          ::MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, static_cast<wchar_t*>(dst), len);
-          ::GlobalUnlock(mem);
-          ::SetClipboardData(CF_UNICODETEXT, mem);
-        }
-      }
-      ::CloseClipboard();
-      return "{\"ok\":true}";
-    }
+    // 与右键菜单的"复制链接地址"共用一份实现（util.cpp 的 SetClipboardText）
+    if (SetClipboardText(text)) return "{\"ok\":true}";
     return "{\"__error\":" + Quote("无法访问剪贴板") + "}";
   }
 

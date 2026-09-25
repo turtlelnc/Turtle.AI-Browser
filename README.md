@@ -4,26 +4,29 @@
 > 我们的官网 turtleweb.cc.cd ——— 基于 [README.md](https://github.com/turtlelnc/Turtle.AI-Browser/blob/main/README.md) 的内容进行 **生动立体** 的解释
 > [🔗 点击前往官网](https://turtleweb.cc.cd)
 
-[![Version](https://img.shields.io/badge/version-v1.0.0--rc1%20(build%20260913)-orange.svg)](#)
+[![Version](https://img.shields.io/badge/version-v1.0.1--rc2%20(build%20260918)-orange.svg)](#)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Chromium](https://img.shields.io/badge/Chromium%20%2F%20CEF-150-4285F4.svg)](https://cef-builds.spotifycdn.com/)
 [![React](https://img.shields.io/badge/React-18-61dafb.svg)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6.svg)](https://www.typescriptlang.org/)
 [![Node](https://img.shields.io/badge/Node-%E2%89%A520-339933.svg)](https://nodejs.org/)
 
-**当前版本：`v1.0.0-rc1 (build 260913)`** —— 发布通道为 **rc（候选发布）**，功能已完整落地但稳定性仍在收敛，请勿用于重要场合。
+**当前版本：`v1.0.1-rc2 (build 260918)`** —— 发布通道为 **rc（候选发布）**，功能已落地但稳定性仍在收敛，请勿用于重要场合。
 
 > 说明与免责：本项目为参考实现，按「现状」提供，可能出现错误。本软件仅供日常使用，不能用于重要场合。
 
 ## 🧭 架构
 
-**v1.0.0-rc1 舍弃 Electron 运行时。** 浏览器主程序是**原生 C++ 可执行文件**，直接链接
+**v1.0.0-rc1 起舍弃 Electron 运行时。** 浏览器主程序是**原生 C++ 可执行文件**，直接链接
 **CEF（Chromium Embedded Framework）**，也就是**真正的 Chromium 内核**（Chromium 150 / CEF 150），
 不再有「Electron 内嵌 Chromium」这一层中间商。
 
-- **浏览器本体**：原生 C++ + CEF，多进程宿主（browser / renderer / gpu / utility / network），
-  renderer 沙箱开启；窗口、标签、地址栏、安全浏览、无痕、能效策略都在这一层。
-- **AI / 存储 / 自动化**：由一个**可选的 Node 边车进程**（`tib-service.exe`）承载，
+- **浏览器本体**：原生 C++ + CEF，窗口、标签、地址栏、安全浏览、无痕、能效策略都在这一层。
+- **进程模型（请如实理解）**：默认运行在**单进程兼容模式**——本机网络服务子进程无法启动
+  （见 [`docs/STATUS.md`](docs/STATUS.md) §3），多进程宿主会直接白屏。因此默认档位下
+  renderer 与网络服务都在主进程内，**没有 renderer 沙箱隔离**；命令行加 `--multi-process`
+  可切回标准多进程模型。启动日志与「关于」页都会如实显示当前进程模型，不假装是标准隔离。
+- **AI / 存储 / 自动化**：由一个**可选的 Node 边车进程**（`tib-service`）承载，
   通过 `127.0.0.1` 上的 HTTP + SSE（随机端口 + Bearer token）与浏览器通信。
   边车是独立进程，可关闭；在「即开即用」能效档下不启动边车，此时 AI 能力降级并明确提示。
 - **UI**：React 18 + TypeScript 5 绘制的浏览器外壳（标签栏 / 地址栏 / 菜单 / 侧边栏），
@@ -32,7 +35,7 @@
 接口契约（`window.tib` 桥、RPC、安全档位、共享类型）以
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 为唯一事实来源。
 
-## ✨ 功能特性（v1.0.0-rc1 十五项）
+## ✨ 功能特性（v1.0.1-rc2 十五项）
 
 ### 1. 完全 Chromium 内核
 浏览器主程序直接链接 CEF，运行真正的 Chromium 150 内核，多进程架构与 renderer 沙箱均来自 Chromium 本体。
@@ -41,14 +44,23 @@
 对齐 Edge / Chrome 的日常浏览能力（多标签、Omnibox 地址栏联想、书签栏、历史、下载、页内查找、
 缩放、全屏、快捷键），并配套一次 UI 大更新。
 
+**网页右键菜单**（原生 Views 菜单，22 个条目按上下文动态启用/禁用）：返回 / 前进 / 重新加载 / 停止加载、
+在新标签页中打开链接·图片、复制链接地址·图片地址、链接另存为、图片另存为、撤销 / 重做 / 剪切 / 复制 /
+粘贴 / 删除 / 全选、搜索选中内容、放大 / 缩小 / 重置为 100%、打印为 PDF、查看页面源代码、检查元素。
+
 ### 3. Microsoft / Google 账户登录与同步
 支持 Microsoft 与 Google 账户登录，并提供同步状态与手动同步入口
 （`tib.signIn(provider)` / `tib.getSyncState()` / `tib.syncNow()`）。
 > 需用户自备 OAuth client id；云端同步能力**尚不完整**，详见「已知限制」。
 
 ### 4. 无痕模式 2.0 / 指纹可改
-无痕模式升级为**无痕++**：独立 `RequestContext` 不落盘，并支持**指纹改写**（User-Agent、
-平台、时区、语言、屏幕、Canvas/WebGL 等画像可调、可一键随机化），能力上接近指纹浏览器。
+无痕模式升级为**无痕++**：不留历史、不写书签、关窗即清会话，并支持**指纹改写**
+（User-Agent、平台、时区、语言、屏幕、CPU 并发数、DNT，以及 Canvas / WebGL 噪声，可一键随机化）。
+改写脚本在无痕窗口每次主框架开始加载时注入，**并在页面加载完成后把页面自己读到的值回读回来做逐项比对**
+（日志里的「无痕指纹回读 / 无痕指纹比对」，验收脚本会断言「不一致 0 项」）。
+> 诚实说明：只做到页面级属性改写 + 噪声，**不是完整的指纹隔离**；也没有使用独立的
+> `RequestContext`（单进程模式下创建它会崩溃），因此 Cookie 仍写入默认 profile 分区。
+> 详见 [`docs/STATUS.md`](docs/STATUS.md)。
 
 ### 5. 安全浏览三档
 | 档位 | 值 | 中文说明 |
@@ -58,7 +70,10 @@
 | **不防护** | `none` | 不拦截；但仍保留「下载放行名单」提示（不阻断）。 |
 
 ### 6. 不安全安装包可保留 + turtlelnc 内容自动放行
-可疑/不安全的下载不再被直接删除，用户可**选择保留**；同时对 turtlelnc 相关内容自动放行、防误杀
+可疑/不安全的下载不再被直接删除，用户可**选择保留**：下载在开始前先过一遍安全判定
+（`CheckDownload`），命中可执行安装包（.exe/.msi/.bat/...）时**只警告不拦截**——
+文件照常落盘、记录里标为「可疑」并写清中文原因，界面上可自行决定是否保留。
+同时对 turtlelnc 相关内容自动放行、防误杀
 （`github.com/turtlelnc/*`、`*.turtlelnc.*`、官网 `turtleweb.cc.cd` 及已签名发布物在任何档位下不拦截、不警告、不计入威胁统计）。
 
 ### 7. 生成网页应用
@@ -104,12 +119,13 @@ AI 接入方式三种并存：**OpenAI 兼容 API**、**MCP 客户端**（工具
 
 | 架构 | 安装包 | 适用 |
 |---|---|---|
-| **x64**（64 位） | `TIbrowser-1.0.0-rc1-x64-setup.exe` | 绝大多数电脑（推荐） |
-| **x86**（32 位） | `TIbrowser-1.0.0-rc1-ia32-setup.exe` | 老旧 32 位电脑 |
-| **ARM64** | `TIbrowser-1.0.0-rc1-arm64-setup.exe` | 骁龙等 ARM 笔记本 |
+| **x64**（64 位） | `TiBrowserSetup.exe` + 同级的 `dist/` | 绝大多数电脑（推荐） |
 
-1. 下载对应架构的安装包，双击运行，按向导完成安装
-2. 从桌面或开始菜单启动 **TIbrowser**
+当前发布只提供 **x64**。x86（32 位）与 ARM64 需要相应的 CEF 发行包并另行构建，本版本未产出。
+
+1. 把 `TiBrowserSetup.exe` 与 `dist/` 放在**同一个文件夹**里，双击安装包，按向导完成安装
+   （用户级安装到 `%LOCALAPPDATA%\Programs\TiBrowser`，不需要管理员权限）
+2. 从桌面或开始菜单启动 **TiBrowser**
 
 > 首次运行 Windows SmartScreen 可能提示「未知发布者」，点击「更多信息 → 仍要运行」即可（本安装包**未做代码签名**）。
 
@@ -177,7 +193,7 @@ TiBrowser-1.0.1-rc2-win-x64/
 
 其他可用脚本：`npm run ui:dev`（UI 热更新开发）、`npm run service:test`（边车自检）。
 
-> **镜像提示**：`ELECTRON_MIRROR` 那一套镜像配置**已经不再需要**——rc1 的浏览器主程序不依赖
+> **镜像提示**：`ELECTRON_MIRROR` 那一套镜像配置**已经不再需要**——rc2 的浏览器主程序不依赖
 > Electron，内核由 `scripts/fetch-cef.mjs` 从 `cef-builds.spotifycdn.com` 获取。
 > 但如果你在国内，`npm install` 仍建议配置 npm 镜像以加速依赖下载：
 > ```bash
@@ -217,13 +233,18 @@ Turtle.AI-Browser/
 
 以下限制是**已知且未完全解决**的，请据此判断是否适合你的场景：
 
-- **通道为 rc**：功能完整但稳定性仍在收敛，**可能崩溃**，请勿用于重要场合，注意备份数据。
+- **通道为 rc**：功能已落地但稳定性仍在收敛，**可能崩溃**，请勿用于重要场合，注意备份数据。
+- **默认单进程兼容模式**：本机网络服务子进程无法启动，因此默认无 renderer 沙箱隔离；
+  `--multi-process` 可切回多进程模型（需所在机器能启动网络服务子进程）。
+- **不支持运行浏览器扩展**：CEF 150 已**移除扩展 API**（头文件里既没有 `LoadExtension`
+  也没有 `CefExtensionHandler`），因此「扩展程序」页只提供**导入 / 解包（.crx 与 zip）/ 清单校验 /
+  登记 / 启用禁用 / 删除**，**不会真正运行**扩展的脚本与后台任务，界面上也如实标注了这一点。
+- **未实现系统打印对话框**：提供「打印为 PDF」（右键菜单 → 打印为 PDF…，落盘到数据目录
+  `Downloads/`），但 `window.print()` 与系统打印机流程未接入（需要完整的 `CefPrintHandler`）。
 - **本地黑名单仅为样例**：未接入真实、及时更新的威胁情报源，防护效果有限。
 - **增强型防护部分能力本地不可用**：其中依赖 Google 云端的能力（如实时站点比对、登录后跨服务保护）
   在本实现中不可用，**界面会明确标注**，不会假装生效。
 - **账户同步不完整**：登录与同步需要用户**自备 OAuth client id**；云端同步能力**尚不完整**。
-- **扩展兼容性受限**：受 Chromium 嵌入方案限制，只有部分类型的扩展能较完整运行
-  （内容脚本 / 后台脚本类较完整；依赖 Chrome 私有 API 的扩展可能异常）。
 - **安装包未做代码签名**：SmartScreen 会提示「未知发布者」，正式分发建议配置签名证书。
 - **Linux / macOS 产物需在对应系统或 CI 上构建**，Windows 上无法交叉打包。
 - **性能与兼容数据未做基准测试**：本项目不提供、也未发布任何跑分或兼容性基准数字，

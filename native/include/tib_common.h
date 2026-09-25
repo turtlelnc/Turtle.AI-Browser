@@ -1,11 +1,12 @@
 // TiBrowser 原生外壳 —— 公共头
-// 版本：v1.0.0-rc1 (build 260913)
+// 版本：v1.0.1-rc2 (build 260918)
 #pragma once
 
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
 #include "include/cef_command_line.h"
+#include "include/cef_download_handler.h"
 #include "include/cef_parser.h"
 #include "include/cef_request.h"
 #include "include/cef_urlrequest.h"
@@ -140,6 +141,12 @@ std::string ExecutableDir();
 
 /** 简易日志：写入 stderr，同时追加到用户数据目录下的 tibrowser.log */
 void Log(const std::string& message);
+
+/**
+ * 把 UTF-8 文本写入系统剪贴板（CF_UNICODETEXT）。成功返回 true。
+ * 右键菜单里的"复制链接地址 / 复制图片地址"与 UI 的 copy.clipboard 走同一份实现。
+ */
+bool SetClipboardText(const std::string& utf8);
 
 /**
  * 当前进程模型的可读描述（写进启动日志与"关于"页）。
