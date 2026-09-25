@@ -417,6 +417,9 @@ if (want(10)) {
 // ---------------------------------------------------------------- 汇总
 killAll()
 await waitNoProcess()
+// 用例 10 的临时数据目录再兜一次：Chromium 退出后可能还抓着目录句柄几千毫秒，
+// 用例内部的清理会失败（实测留下一个空目录），放在最后再删一次最稳。
+purgeDir(join(ROOT, '.tmp-acceptance-udd'))
 console.log('\n=== 验收结论 ===')
 const failed = results.filter((r) => !r.pass)
 const passed = results.length - failed.length
